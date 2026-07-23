@@ -5,6 +5,11 @@
  */
 require_once __DIR__ . '/config.php';
 
+// PHP 7.4 兼容层（str_starts_with / str_ends_with / str_contains）
+if (PHP_VERSION_ID < 80000) {
+    require_once __DIR__ . '/lib/compat.php';
+}
+
 // session 配置
 ini_set('session.cookie_httponly', 1);
 ini_set('session.cookie_samesite', 'Lax');
