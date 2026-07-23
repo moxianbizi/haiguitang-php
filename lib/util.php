@@ -83,9 +83,19 @@ function verify_signed_code(string $email, string $token, string $code): bool {
     $expected = hash_hmac('sha256', $payload, Config::$SECRET_KEY);
     if (!hash_equals($expected, $sig)) return false;
     $data = base64_decode($payload);
+    if ($data === false) return false;
     $arr = explode('|', $data);
     if (count($arr) !== 3) return false;
     [$e, $c, $expire] = $arr;
     if (time() > (int)$expire) return false;
     return hash_equals(strtolower($e), strtolower($email)) && hash_equals($c, $code);
+}
+
+/** 安全化文件名：去路径/控制字符、限制长度 */
+function sanitize_filename(string $s): string {
+    $s = preg_replace('/[\\/:*?"<>|]+/', '_', $s);
+    $s = preg_replace('/[\x00-\x1f\x7f]+/', '', $s);
+    $s = trim($s, ' ._-');
+    if ($s === '') $s = 'untitled';
+    return mb_substr($s, 0, 120);
 }

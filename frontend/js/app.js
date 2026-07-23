@@ -29,6 +29,10 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+function escapeJs(str) {
+  return JSON.stringify(str ?? "").slice(1, -1);
+}
+
 function toast(msg, type = "") {
   const t = $("#toast");
   if (!t) return;
@@ -115,7 +119,10 @@ const KeyMgr = {
 // ---------- 路由 ----------
 function route() {
   const hash = location.hash.replace(/^#/, "") || "/";
-  closeAllModals();
+  // 清空弹窗并恢复滚动，避免 closeAllModals -> closeSettings -> route 递归
+  const root = $("#modalRoot");
+  if (root) root.innerHTML = "";
+  document.body.style.overflow = "";
   if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
 
   if (hash === "/" || hash === "") return renderHome();
@@ -149,11 +156,39 @@ function headerHtml(active = "") {
           ${u
             ? `<a href="#/profile" class="user-chip"><span class="user-avatar">${escapeHtml(u.username.slice(0, 1).toUpperCase())}</span>${escapeHtml(u.username)}</a>`
             : `<a href="#/auth" class="user-chip">登录</a>`}
+          <button class="mobile-menu-btn" onclick="toggleMobileNav(event)" aria-label="菜单">☰</button>
         </div>
+      </div>
+      <div class="mobile-nav" id="mobileNav" onclick="hideMobileNav(event)">
+        <a href="#/" class="${active === "home" ? "active" : ""}">🏠 汤馆</a>
+        <a href="#/rooms" class="${active === "rooms" ? "active" : ""}">🎮 房间</a>
+        ${u ? `<a href="#/profile" class="${active === "profile" ? "active" : ""}">👤 我的</a>` : ""}
       </div>
     </header>
   `;
 }
+
+window.toggleMobileNav = (e) => {
+  e.stopPropagation();
+  const nav = $("#mobileNav");
+  if (!nav) return;
+  nav.classList.toggle("open");
+};
+
+window.hideMobileNav = (e) => {
+  if (e && e.target.tagName === "A") {
+    const nav = $("#mobileNav");
+    if (nav) nav.classList.remove("open");
+  }
+};
+
+document.addEventListener("click", (e) => {
+  const nav = $("#mobileNav");
+  if (!nav || !nav.classList.contains("open")) return;
+  if (!nav.contains(e.target) && !e.target.closest(".mobile-menu-btn")) {
+    nav.classList.remove("open");
+  }
+});
 
 // ---------- 首页 ----------
 async function renderHome() {
@@ -170,7 +205,7 @@ async function renderHome() {
           <input type="text" id="searchInput" placeholder="搜索标题、汤面或系列…" value="${escapeHtml(store.search)}" />
         </div>
       </section>
-      <div class="stats-bar container">
+      <div class="stats-bar container" id="statsBar">
         <div class="stat"><strong>${store.soups.length}</strong>收录汤数</div>
         <div class="stat"><strong>${store.seasons.length}</strong>系列/季</div>
         <div class="stat"><strong>${KeyMgr.has() ? "已配置" : "未配置"}</strong>AI 主持人</div>
@@ -194,6 +229,7 @@ async function renderHome() {
     });
   }
   await loadSoups();
+  renderStats();
   renderFilters();
   renderHomeList();
 }
@@ -210,9 +246,33 @@ function applyFilters() {
   });
 }
 
+function renderSkeletonGrid() {
+  return `<div class="container"><div class="grid" style="padding-bottom:28px">
+    ${Array.from({ length: 6 }).map(() => `
+      <article class="card" style="pointer-events:none;min-height:160px">
+        <div class="skeleton" style="width:90px;height:22px;border-radius:999px;margin-bottom:14px"></div>
+        <div class="skeleton" style="width:70%;height:22px;margin-bottom:10px"></div>
+        <div class="skeleton" style="width:100%;height:14px;margin-bottom:8px"></div>
+        <div class="skeleton" style="width:90%;height:14px;margin-bottom:8px"></div>
+        <div class="skeleton" style="width:60%;height:14px"></div>
+      </article>
+    `).join("")}
+  </div></div>`;
+}
+
+function renderStats() {
+  const bar = $("#statsBar");
+  if (!bar) return;
+  bar.innerHTML = `
+    <div class="stat"><strong>${store.soups.length}</strong>收录汤数</div>
+    <div class="stat"><strong>${store.seasons.length}</strong>系列/季</div>
+    <div class="stat"><strong>${KeyMgr.has() ? "已配置" : "未配置"}</strong>AI 主持人</div>
+  `;
+}
+
 async function loadSoups() {
   if (store.soups.length) return;
-  $("#homeContent").innerHTML = `<div class="empty"><div class="spinner"></div><p>正在熬煮海龟汤…</p></div>`;
+  $("#homeContent").innerHTML = renderSkeletonGrid();
   const { ok, data } = await API.json("/api/soups");
   if (!ok) {
     $("#homeContent").innerHTML = `<div class="empty"><div class="empty-icon">🍲</div><p>加载失败，请确认后端已启动</p></div>`;
@@ -221,6 +281,7 @@ async function loadSoups() {
   store.soups = data.soups || [];
   store.seasons = data.seasons || [];
   applyFilters();
+  renderStats();
   renderFilters();
 }
 
@@ -232,11 +293,14 @@ function renderFilters() {
   const f = document.createElement("div");
   f.className = "filters container";
   f.innerHTML = `
-    <button class="filter-chip ${store.season === "" ? "active" : ""}" onclick="setSeason('')">全部</button>
+    <button class="filter-chip ${store.season === "" ? "active" : ""}" data-season="">全部</button>
     ${store.seasons.map((s) => `
-      <button class="filter-chip ${store.season === s ? "active" : ""}" onclick="setSeason('${escapeHtml(s)}')">${escapeHtml(s)}</button>
+      <button class="filter-chip ${store.season === s ? "active" : ""}" data-season="${escapeHtml(s)}">${escapeHtml(s)}</button>
     `).join("")}
   `;
+  f.querySelectorAll("[data-season]").forEach((btn) => {
+    btn.addEventListener("click", () => setSeason(btn.dataset.season));
+  });
   hero.after(f);
 }
 
@@ -423,11 +487,6 @@ function closeModal(e) {
 }
 window.closeModal = closeModal;
 
-function closeAllModals() {
-  closeModal();
-  closeSettings();
-}
-
 async function newRoomFromSoup(soupId) {
   if (!store.user) { toast("请先登录", "err"); location.hash = "#/auth"; return; }
   const { ok, data } = await API.post("/api/rooms", { soup_id: soupId, ai_enabled: true });
@@ -445,6 +504,9 @@ function renderAuth() {
       ${headerHtml()}
       <div class="container-sm">
         <div class="form-card">
+          <div class="logo-icon">🍲</div>
+          <h2>海龟汤馆</h2>
+          <p class="sub">登录后即可创建房间、向 AI 提问</p>
           <div class="form-tabs">
             <button class="form-tab active" id="tabLogin" onclick="switchAuthTab('login')">登录</button>
             <button class="form-tab" id="tabRegister" onclick="switchAuthTab('register')">注册</button>
@@ -561,13 +623,16 @@ async function renderRooms() {
       ${headerHtml("rooms")}
       <div class="container room-hall">
         <div class="hall-head">
-          <h2>多人房间</h2>
+          <div>
+            <h2>多人房间</h2>
+            <p style="margin:6px 0 0;color:var(--text-3);font-size:0.9rem">创建房间邀请好友，或输入房间号加入</p>
+          </div>
           <div class="join-box">
             <input id="joinCode" placeholder="输入房间号加入" maxlength="6" />
             <button class="btn btn-secondary" style="min-width:auto;flex:0 0 auto;padding:0 18px" onclick="joinByCode()">加入</button>
           </div>
         </div>
-        <div class="side-card">
+        <div class="side-card" style="animation:fadeInUp 0.45s ease both">
           <h4>创建新房间</h4>
           <div class="field">
             <label>选择一碗汤（可不选，进入后再选）</label>
@@ -620,9 +685,9 @@ window.pickSoupForRoom = () => {
         <button class="modal-close" onclick="closeModal(event)">✕</button>
       </div>
       <div class="modal-body">
-        <div class="soup-picker">
+        <div class="soup-picker" id="soupPickerList">
           ${store.soups.map((s) => `
-            <div class="soup-pick-item" onclick="confirmPickSoup(${s.id}, '${escapeHtml(s.title)}')">
+            <div class="soup-pick-item" data-id="${s.id}" data-title="${escapeHtml(s.title)}">
               <div class="t">${escapeHtml(s.title)}</div>
               <div class="s">${escapeHtml(s.season)}${s.episode ? " · " + escapeHtml(s.episode) : ""}</div>
             </div>
@@ -631,12 +696,16 @@ window.pickSoupForRoom = () => {
       </div>
     </div>
   `;
+  $("#soupPickerList").querySelectorAll(".soup-pick-item").forEach((item) => {
+    item.addEventListener("click", () => confirmPickSoup(+item.dataset.id, item.dataset.title));
+  });
   document.body.style.overflow = "hidden";
 };
 
 window.confirmPickSoup = (id, title) => {
   _pickedSoupId = id;
-  $("#newRoomSoup").value = title;
+  const input = $("#newRoomSoup");
+  if (input) input.value = title;
   closeModal();
 };
 
@@ -665,7 +734,7 @@ async function renderRoom(code) {
   if (!store.user) { toast("请先登录", "err"); location.hash = "#/auth"; return; }
   const { ok, data } = await API.json(`/api/rooms/${code}`);
   if (!ok) {
-    $("#app").innerHTML = `<div class="page">${headerHtml("rooms")}<div class="empty"><div class="empty-icon">🎮</div><p>${escapeHtml(data.error || "房间不存在")}</p><button class="btn btn-secondary" onclick="location.hash='#/rooms'">返回大厅</button></div></div>`;
+    $("#app").innerHTML = `<div class="page">${headerHtml("rooms")}<div class="empty"><div class="empty-icon">🎮</div><p>${escapeHtml(data.error || "房间不存在")}</p><button class="btn btn-secondary" style="margin-top:16px" onclick="location.hash='#/rooms'">返回大厅</button></div></div>`;
     return;
   }
   const room = data.room;
@@ -818,9 +887,9 @@ window.pickSoupForRoomUpdate = (code) => {
         <button class="modal-close" onclick="closeModal(event)">✕</button>
       </div>
       <div class="modal-body">
-        <div class="soup-picker">
+        <div class="soup-picker" id="soupUpdateList" data-code="${escapeHtml(code)}">
           ${store.soups.map((s) => `
-            <div class="soup-pick-item" onclick="updateRoomSoup('${escapeHtml(code)}', ${s.id})">
+            <div class="soup-pick-item" data-id="${s.id}">
               <div class="t">${escapeHtml(s.title)}</div>
               <div class="s">${escapeHtml(s.season)}${s.episode ? " · " + escapeHtml(s.episode) : ""}</div>
             </div>
@@ -829,6 +898,11 @@ window.pickSoupForRoomUpdate = (code) => {
       </div>
     </div>
   `;
+  const list = $("#soupUpdateList");
+  const roomCode = list.dataset.code;
+  list.querySelectorAll(".soup-pick-item").forEach((item) => {
+    item.addEventListener("click", () => updateRoomSoup(roomCode, +item.dataset.id));
+  });
   document.body.style.overflow = "hidden";
 };
 
@@ -843,12 +917,17 @@ window.updateRoomSoup = async (code, soupId) => {
 // ---------- 个人中心 ----------
 async function renderProfile() {
   if (!store.user) { location.hash = "#/auth"; return; }
-  const mySoups = store.soups.filter((s) => false); // 投稿功能简化
   $("#app").innerHTML = `
     <div class="page">
       ${headerHtml("profile")}
       <div class="container">
-        <h2 class="section-title" style="margin-top:32px">个人中心</h2>
+        <div class="profile-header">
+          <div class="avatar">${escapeHtml(store.user.username.slice(0, 1).toUpperCase())}</div>
+          <div class="info">
+            <h2>${escapeHtml(store.user.username)}</h2>
+            <p>${escapeHtml(store.user.email)} · 账号ID #${store.user.id}</p>
+          </div>
+        </div>
         <div class="profile-grid">
           <div class="profile-card">
             <h3>账号</h3>

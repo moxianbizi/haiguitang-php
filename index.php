@@ -19,11 +19,38 @@ session_start();
 // header('Access-Control-Allow-Credentials: true');
 
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-// 调试块已移除
+
+// 子目录部署支持：识别当前入口文件的目录前缀
+$scriptDir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/index.php')), '/');
+if ($scriptDir !== '' && $scriptDir !== '/' && str_starts_with($uri, $scriptDir . '/')) {
+    $uri = substr($uri, strlen($scriptDir));
+} elseif ($scriptDir !== '' && $scriptDir !== '/' && $uri === $scriptDir) {
+    $uri = '/';
+}
+if ($uri === '' || $uri === false) $uri = '/';
 
 // 注意：PHP 内置 server 的 router 模式下，SCRIPT_NAME 会被设为请求路径，
-// 不能用它来推算部署子目录。直接用 REQUEST_URI 判断即可。
-// 子目录部署时，前端资源路径会带前缀，这里不做剥离，靠 .htaccess/Nginx 处理。
+// dirname 会变成请求路径的目录（例如 /api），若按上述逻辑会误剥离。
+// 因此这里增加一个判断：如果 SCRIPT_NAME 对应的真实文件不存在，
+// 说明是 router 模式，忽略它。
+$scriptFile = $_SERVER['DOCUMENT_ROOT'] . ($_SERVER['SCRIPT_NAME'] ?? '');
+if (!is_file($scriptFile)) {
+    // router 模式：重新取 REQUEST_URI 并按环境变量 BASE_PATH（可选）剥离
+    $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    $base = rtrim(getenv('BASE_PATH') ?: '', '/');
+    if ($base && $base !== '/' && str_starts_with($uri, $base . '/')) {
+        $uri = substr($uri, strlen($base));
+    }
+    if ($uri === '' || $uri === false) $uri = '/';
+}
+
+// 调试（生产删除）
+// if (getenv('HGT_DEBUG')) {
+//     header('Content-Type: text/plain');
+//     echo 'SCRIPT_NAME=' . ($_SERVER['SCRIPT_NAME'] ?? '') . "\n";
+//     echo 'uri=' . $uri . "\n";
+//     exit;
+// }
 
 // API 路由
 if (str_starts_with($uri, '/api/')) {

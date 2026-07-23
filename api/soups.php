@@ -101,8 +101,12 @@ function soups_create() {
 
     $filename = trim($data['filename'] ?? '');
     if ($filename === '') {
-        $filename = $season ? "{$season}{$episode}_{$title}.md" : "{$title}.md";
+        $baseName = $season ? "{$season}{$episode}_{$title}" : $title;
+    } else {
+        $baseName = preg_replace('/\.md$/i', '', $filename);
     }
+    $baseName = sanitize_filename($baseName);
+    $filename = $baseName . '.md';
 
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT id FROM soups WHERE filename = ?');
