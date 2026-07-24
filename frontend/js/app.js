@@ -1515,6 +1515,12 @@ async function adminSettings() {
       <p class="admin-hint">点击下载当前数据库完整备份（SQLite 文件）。</p>
       <a class="btn btn-secondary" href="/api/admin/backup" download>💾 下载数据库备份</a>
     </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">🔧 运维工具</h3>
+      <p class="admin-hint">一键拉取代码更新、清除缓存、压缩数据库等。</p>
+      <a class="btn btn-primary" href="/tool.php" target="_blank">🔧 打开运维工具</a>
+    </div>
   `;
 }
 

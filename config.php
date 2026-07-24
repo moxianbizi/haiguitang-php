@@ -36,6 +36,9 @@ class Config {
     /** 房间消息保留条数（0=全部） */
     public static $ROOM_MSG_LIMIT = 200;
 
+    /** 运维工具 Token（留空则只用管理员 session，设置后支持 ?token=xxx 免登录访问 tool.php） */
+    public static $TOOL_TOKEN = '';
+
     /** 初始化时从环境变量覆盖 */
     public static function load() {
         $env = function($key, $default) {
