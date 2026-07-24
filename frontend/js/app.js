@@ -130,6 +130,7 @@ function route() {
   if (hash === "/auth") return renderAuth();
   if (hash === "/rooms") return renderRooms();
   if (hash.startsWith("/room/")) return renderRoom(hash.slice("/room/".length));
+  if (hash.startsWith("/soup/")) return renderSoupPage(hash.slice("/soup/".length));
   if (hash === "/profile") return renderProfile();
   if (hash.startsWith("/admin")) return renderAdmin(hash);
   renderHome();
@@ -344,41 +345,65 @@ function renderHomeList() {
 
 window.setSeason = (s) => { store.season = s; applyFilters(); renderFilters(); renderHomeList(); };
 
-// ---------- 详情弹窗 + 单人 AI ----------
+// ---------- 详情页 + 单人 AI ----------
 async function openSoup(id) {
-  const { ok, data } = await API.json(`/api/soups/${id}`);
-  if (!ok) { toast("加载失败", "err"); return; }
-  store.selected = data;
-  renderSoupModal(data, false);
+  // 改为独立路由全屏页面，浏览器后退也能返回
+  location.hash = "#/soup/" + id;
 }
 window.openSoup = openSoup;
 
-function classifyAnswer(ans) {
-  const a = (ans || "").trim();
-  if (a.includes("猜中")) return "win";
-  if (a === "是" || a.startsWith("是")) return "yes";
-  if (a === "否" || a.startsWith("否")) return "no";
-  if (a.includes("无关")) return "irrelevant";
-  return "";
+async function renderSoupPage(id) {
+  const soupId = parseInt(id, 10);
+  if (!soupId || soupId <= 0) { location.hash = "#/"; return; }
+
+  // 先渲染骨架，避免白屏
+  $("#app").innerHTML = `
+    <div class="page soup-detail-page">
+      ${headerHtml("")}
+      <div class="container soup-container">
+        <div class="skeleton" style="width:60%;height:32px;margin:24px 0 8px"></div>
+        <div class="skeleton" style="width:40%;height:14px;margin-bottom:24px"></div>
+        <div class="skeleton" style="width:100%;height:14px;margin-bottom:8px"></div>
+        <div class="skeleton" style="width:90%;height:14px;margin-bottom:8px"></div>
+        <div class="skeleton" style="width:70%;height:14px"></div>
+      </div>
+      <div id="modalRoot"></div>
+    </div>
+  `;
+
+  const { ok, data } = await API.json(`/api/soups/${soupId}`);
+  if (!ok) {
+    $("#app").innerHTML = `
+      <div class="page soup-detail-page">
+        ${headerHtml("")}
+        <div class="container soup-container">
+          <button class="btn btn-ghost back-btn" onclick="history.back()">← 返回</button>
+          <div class="empty"><div class="empty-icon">🍲</div><p>${escapeHtml(data.error || "加载失败")}</p></div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  store.selected = data;
+  renderSoupPageContent(data);
 }
 
-function renderSoupModal(soup, revealed) {
-  const root = $("#modalRoot");
-  if (!root) return;
+function renderSoupPageContent(soup) {
   const hist = store.aiHistory[soup.id] || [];
   const keyOk = KeyMgr.has();
 
-  root.innerHTML = `
-    <div class="overlay open" onclick="closeModal(event)"></div>
-    <div class="modal open" role="dialog" aria-modal="true">
-      <div class="modal-header">
-        <div>
-          <h2 class="modal-title">${escapeHtml(soup.title)}</h2>
-          <div class="modal-meta">${escapeHtml(soup.season)}${soup.episode ? " · " + escapeHtml(soup.episode) : ""} · ${escapeHtml(soup.filename)}</div>
+  $("#app").innerHTML = `
+    <div class="page soup-detail-page">
+      ${headerHtml("")}
+      <div class="container soup-container">
+        <button class="btn btn-ghost back-btn" onclick="history.back()">← 返回</button>
+
+        <div class="soup-detail-header">
+          <span class="card-tag">${escapeHtml(soup.season)}${soup.episode ? " · " + escapeHtml(soup.episode) : ""}</span>
+          <h1 class="soup-detail-title">${escapeHtml(soup.title)}</h1>
+          <div class="modal-meta">${escapeHtml(soup.filename)}</div>
         </div>
-        <button class="modal-close" onclick="closeModal(event)">✕</button>
-      </div>
-      <div class="modal-body">
+
         <div class="section-label">汤面</div>
         <div class="text-block">${escapeHtml(soup.surface || "（暂无汤面）")}</div>
 
@@ -411,14 +436,29 @@ function renderSoupModal(soup, revealed) {
         </div>
         <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base || "（暂无汤底）")}</div>
 
-        <div class="modal-bottom-actions">
+        <div class="soup-detail-actions">
           <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
           <a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>
         </div>
       </div>
+      <div id="modalRoot"></div>
     </div>
   `;
-  document.body.style.overflow = "hidden";
+  window.scrollTo(0, 0);
+}
+
+function classifyAnswer(ans) {
+  const a = (ans || "").trim();
+  if (a.includes("猜中")) return "win";
+  if (a === "是" || a.startsWith("是")) return "yes";
+  if (a === "否" || a.startsWith("否")) return "no";
+  if (a.includes("无关")) return "irrelevant";
+  return "";
+}
+
+function renderSoupModal(soup, revealed) {
+  // 已废弃：汤详情改为独立路由全屏页面，见 renderSoupPage / renderSoupPageContent
+  renderSoupPageContent(soup);
 }
 
 async function askAiSingle(soupId) {
