@@ -80,7 +80,17 @@ function handle_action(string $op) {
     try {
         switch ($op) {
             case 'git_pull':
-                $result['output'] = run_shell('git pull 2>&1');
+                $branch = git_branch();
+                $before = trim(run_shell('git rev-parse HEAD 2>&1'));
+                $pullOut = run_shell("git pull origin $branch 2>&1");
+                $after = trim(run_shell('git rev-parse HEAD 2>&1'));
+                $result['output'] = "分支: $branch\n拉取前: $before\n拉取后: $after\n\n---- git pull 输出 ----\n$pullOut\n";
+                if ($before === $after) {
+                    $result['output'] .= "\nℹ️ HEAD 未变化（本地已是最新，或远程没有新提交）";
+                } else {
+                    $count = trim(run_shell("git rev-list ${before}..${after} --count 2>&1"));
+                    $result['output'] .= "\n✅ 已更新到新版本，新增 $count 个提交";
+                }
                 break;
             case 'git_status':
                 $result['output'] = run_shell('git status 2>&1');
@@ -89,7 +99,8 @@ function handle_action(string $op) {
                 $result['output'] = run_shell('git log --oneline -20 2>&1');
                 break;
             case 'git_stash':
-                $result['output'] = run_shell('git stash && git pull && git stash pop 2>&1');
+                $branch = git_branch();
+                $result['output'] = run_shell("git stash && git pull origin $branch && git stash pop 2>&1");
                 break;
             case 'clear_cache':
                 $count = 0;
@@ -123,13 +134,29 @@ function handle_action(string $op) {
                 $result['output'] = 'PHP 版本: ' . PHP_VERSION . '\nSAPI: ' . PHP_SAPI . '\n已加载扩展: ' . implode(', ', get_loaded_extensions());
                 break;
             case 'check_updates':
+                // 关键：必须先 fetch，否则 origin/<branch> 是本地缓存的旧值
+                $fetchOut = run_shell('git fetch origin 2>&1');
+                $branch = git_branch();
                 $current = trim(run_shell('git rev-parse HEAD 2>&1'));
-                $remote = trim(run_shell('git rev-parse origin/master 2>&1'));
-                $result['output'] = "当前: $current\n远程: $remote\n";
-                if ($current === $remote) {
-                    $result['output'] .= "✅ 已是最新版本";
+                $remoteRef = "origin/$branch";
+                $remote = trim(run_shell("git rev-parse $remoteRef 2>&1"));
+                // 落后/领先提交数
+                $behind = trim(run_shell("git rev-list HEAD..$remoteRef --count 2>&1"));
+                $ahead = trim(run_shell("git rev-list $remoteRef..HEAD --count 2>&1"));
+                $behind = $behind === '' || !ctype_digit($behind) ? '?' : $behind;
+                $ahead = $ahead === '' || !ctype_digit($ahead) ? '?' : $ahead;
+                $result['output'] = "分支: $branch\n当前 HEAD: $current\n远程 $remoteRef: $remote\n落后: $behind 个提交 · 领先: $ahead 个提交\n";
+                if ($fetchOut !== '' && $fetchOut !== '(无输出)') {
+                    $result['output'] .= "---- git fetch 输出 ----\n$fetchOut\n";
+                }
+                if (ctype_digit((string)$behind) && (int)$behind > 0) {
+                    $result['output'] .= "\n⚠️ 远程有 $behind 个新提交，可点击「一键拉取更新」";
+                } elseif (ctype_digit((string)$ahead) && (int)$ahead > 0) {
+                    $result['output'] .= "\nℹ️ 本地领先远程 $ahead 个未推送的提交";
+                } elseif ($current === $remote) {
+                    $result['output'] .= "\n✅ 已是最新版本";
                 } else {
-                    $result['output'] .= "⚠️ 有新版本可用";
+                    $result['output'] .= "\nℹ️ 本地与远程 HEAD 不同，但未识别落后/领先提交数";
                 }
                 break;
             case 'reset_opcache':
@@ -153,7 +180,9 @@ function run_shell(string $cmd): string {
     if (!function_exists('shell_exec')) {
         return 'shell_exec 不可用';
     }
-    $output = @shell_exec($cmd);
+    // 确保在项目根目录执行，避免 web 进程 CWD 不对
+    $wrapped = 'cd ' . escapeshellarg(__DIR__) . ' && ' . $cmd;
+    $output = @shell_exec($wrapped);
     return $output ?: '(无输出)';
 }
 
@@ -161,6 +190,13 @@ function fmt_size(int $bytes): string {
     if ($bytes < 1024) return $bytes . ' B';
     if ($bytes < 1048576) return number_format($bytes / 1024, 1) . ' KB';
     return number_format($bytes / 1048576, 2) . ' MB';
+}
+
+// 获取当前分支名（master / main 等），失败回退 master
+function git_branch(): string {
+    $b = trim(run_shell('git rev-parse --abbrev-ref HEAD 2>&1'));
+    $b = trim(explode("\n", $b)[0]);
+    return ($b !== '' && $b !== 'HEAD') ? $b : 'master';
 }
 
 // ===================== 页面渲染 =====================

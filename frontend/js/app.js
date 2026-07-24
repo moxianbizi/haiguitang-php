@@ -410,10 +410,11 @@ function renderSoupModal(soup, revealed) {
           <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
         </div>
         <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base || "（暂无汤底）")}</div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
-        <a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>
+
+        <div class="modal-bottom-actions">
+          <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
+          <a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>
+        </div>
       </div>
     </div>
   `;
