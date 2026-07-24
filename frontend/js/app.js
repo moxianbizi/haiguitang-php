@@ -409,9 +409,8 @@ function renderSoupModal(soup, revealed) {
         </div>
       </div>
       <div class="modal-actions">
-        <a class="btn btn-primary" href="/api/soups/${soup.id}/download" download>⬇ 下载 Markdown</a>
-        <button class="btn btn-secondary" onclick="newRoomFromSoup(${soup.id})">🎮 用这碗汤开房间</button>
-        <button class="btn btn-secondary" onclick="closeModal(event)">✕ 关闭</button>
+        <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
+        <a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>
       </div>
     </div>
   `;

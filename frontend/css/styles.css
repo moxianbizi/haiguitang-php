@@ -438,7 +438,7 @@ input, textarea {
 /* Cards grid */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: 20px;
   padding-bottom: 52px;
 }
@@ -664,10 +664,17 @@ input, textarea {
 
 .modal-actions {
   display: flex;
-  gap: 12px;
-  padding: 18px 28px 26px;
+  gap: 10px;
+  padding: 14px 20px 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.modal-actions .btn {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  font-size: 0.9rem;
 }
 
 .btn {
@@ -719,6 +726,17 @@ input, textarea {
 
 .btn-danger:hover {
   background: rgba(255, 107, 107, 0.18);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
 }
 
 .btn:disabled {
@@ -1780,11 +1798,6 @@ input, textarea {
     height: 280px;
   }
 
-  .grid {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-
   .card {
     padding: 18px;
   }
@@ -1811,10 +1824,6 @@ input, textarea {
   .modal-actions {
     padding-left: 20px;
     padding-right: 20px;
-  }
-
-  .btn {
-    flex: 1 1 100%;
   }
 
   .stats-bar {
