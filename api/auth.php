@@ -31,34 +31,7 @@ function auth_send_code() {
 }
 
 function auth_register() {
-    $data = body_json();
-    $username = trim($data['username'] ?? '');
-    $email = strtolower(trim($data['email'] ?? ''));
-    $password = (string)($data['password'] ?? '');
-    $code = trim($data['code'] ?? '');
-    $token = $data['token'] ?? '';
-
-    if (mb_strlen($username) < 2) json_error('用户名至少 2 个字符');
-    if (strlen($password) < 6) json_error('密码至少 6 个字符');
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
-    if ($code === '' || $token === '') json_error('请输入验证码');
-
-    if (!verify_signed_code($email, $token, $code)) {
-        json_error('验证码错误或已过期');
-    }
-
-    $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT id FROM users WHERE username = ? OR email = ?');
-    $stmt->execute([$username, $email]);
-    if ($stmt->fetch()) json_error('用户名或邮箱已存在', 409);
-
-    $hash = hash_password($password);
-    $stmt = $pdo->prepare('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)');
-    $stmt->execute([$username, $email, $hash]);
-    $uid = (int)$pdo->lastInsertId();
-
-    $_SESSION['user_id'] = $uid;
-    json_ok(['user' => ['id' => $uid, 'username' => $username, 'email' => $email]]);
+    json_error('注册暂未开放，如需账号请前往交流群寻找管理员');
 }
 
 function auth_login() {

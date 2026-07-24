@@ -212,7 +212,7 @@ async function renderHome() {
       </div>
       <div id="homeContent"></div>
       <footer class="footer container">
-        <p>海龟汤馆 · 收录经典悬疑推理 · 整理人长安</p>
+        <span>海龟汤馆 · 整理人长安</span>
       </footer>
       <div id="modalRoot"></div>
     </div>
@@ -509,9 +509,12 @@ function renderAuth() {
           <p class="sub">登录后即可创建房间、向 AI 提问</p>
           <div class="form-tabs">
             <button class="form-tab active" id="tabLogin" onclick="switchAuthTab('login')">登录</button>
-            <button class="form-tab" id="tabRegister" onclick="switchAuthTab('register')">注册</button>
           </div>
           <div id="authForm"></div>
+          <div class="register-notice">
+            <p>注册暂未开放</p>
+            <p>如需账号，请前往交流群寻找管理员</p>
+          </div>
         </div>
       </div>
       <div id="modalRoot"></div>
@@ -538,7 +541,6 @@ window.switchAuthTab = (mode) => {
         <input class="input" id="loginPassword" type="password" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')doLogin()" />
       </div>
       <button class="btn btn-primary" style="width:100%" onclick="doLogin()">登录</button>
-      <p class="form-foot">还没有账号？<a href="#" onclick="switchAuthTab('register');return false;">去注册</a></p>
     `;
   } else {
     f.innerHTML = `
