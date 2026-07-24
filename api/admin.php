@@ -89,11 +89,18 @@ function admin_users_list() {
         $params[] = "%$q%";
         $params[] = "%$q%";
     }
-    $total = (int)$pdo->query("SELECT COUNT(*) $sql")->fetchColumn();
+    $stmt = $pdo->prepare("SELECT COUNT(*) $sql");
+    $stmt->execute($params);
+    $total = (int)$stmt->fetchColumn();
 
     // prepare needed because of LIKE params
-    $stmt = $pdo->prepare("SELECT id, username, email, is_admin, is_banned, banned_reason, created_at $sql ORDER BY id DESC LIMIT " . (($page - 1) * $perPage) . ", $perPage");
-    $stmt->execute($params);
+    $stmt = $pdo->prepare("SELECT id, username, email, is_admin, is_banned, banned_reason, created_at $sql ORDER BY id DESC LIMIT :offset, :limit");
+    $stmt->bindValue(':offset', ($page - 1) * $perPage, PDO::PARAM_INT);
+    $stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
+    foreach ($params as $i => $p) {
+        $stmt->bindValue($i + 3, $p);
+    }
+    $stmt->execute();
     $users = $stmt->fetchAll();
 
     json_ok([
@@ -111,7 +118,7 @@ function admin_users_create() {
     $email = strtolower(trim($data['email'] ?? ''));
     $password = (string)($data['password'] ?? '');
     $is_admin = !empty($data['is_admin']) ? 1 : 0;
-    if ($username === '' || $email === '' || strlen($password) < 6) json_error('用户名、邮箱不能为空，密码至少 6 位');
+    if ($username === '' || $email === '' || strlen($password) < 8) json_error('用户名、邮箱不能为空，密码至少 8 位');
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
 
     $pdo = DB::pdo();
@@ -178,7 +185,7 @@ function admin_users_reset_password(int $id) {
 
     $data = body_json();
     $password = (string)($data['password'] ?? '');
-    if (strlen($password) < 6) json_error('密码至少 6 位');
+    if (strlen($password) < 8) json_error('密码至少 8 位');
 
     $hash = hash_password($password);
     $stmt = $pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
@@ -199,7 +206,9 @@ function admin_users_delete(int $id) {
 
     // 检查是否是最后一个管理员
     $isLastAdmin = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE is_admin = 1")->fetchColumn() <= 1;
-    $targetIsAdmin = (int)$pdo->query("SELECT is_admin FROM users WHERE id = $id")->fetchColumn();
+    $stmt = $pdo->prepare('SELECT is_admin FROM users WHERE id = ?');
+    $stmt->execute([$id]);
+    $targetIsAdmin = (int)$stmt->fetchColumn();
     if ($isLastAdmin && $targetIsAdmin) json_error('不能删除最后一个管理员');
 
     $stmt = $pdo->prepare('DELETE FROM users WHERE id = ?');
@@ -223,10 +232,17 @@ function admin_soups_list() {
         $params[] = "%$q%";
         $params[] = "%$q%";
     }
-    $total = (int)$pdo->query("SELECT COUNT(*) $sql")->fetchColumn();
-
-    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT " . (($page - 1) * $perPage) . ", $perPage");
+    $stmt = $pdo->prepare("SELECT COUNT(*) $sql");
     $stmt->execute($params);
+    $total = (int)$stmt->fetchColumn();
+
+    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT :offset, :limit");
+    $stmt->bindValue(':offset', ($page - 1) * $perPage, PDO::PARAM_INT);
+    $stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
+    foreach ($params as $i => $p) {
+        $stmt->bindValue($i + 3, $p);
+    }
+    $stmt->execute();
     $soups = $stmt->fetchAll();
 
     json_ok([
@@ -270,7 +286,7 @@ function admin_soups_create() {
     $stmt->execute([$filename, $season, $episode, $title, $surface, $base, $admin['id'], $order]);
     $id = (int)$pdo->lastInsertId();
 
-    @mkdir(Config::$SOUPS_DIR, 0777, true);
+    @mkdir(Config::$SOUPS_DIR, 0755, true);
     $md = "# {$title}\n\n";
     if ($season) $md .= "**季：**{$season}\n\n";
     if ($episode) $md .= "**集：**{$episode}\n\n";
@@ -289,19 +305,23 @@ function admin_soups_update(int $id) {
     if (!$s) json_error('未找到', 404);
 
     $data = body_json();
-    foreach (['title', 'surface', 'base', 'season', 'episode', 'filename'] as $f) {
+    foreach (['title', 'surface', 'base', 'season', 'episode'] as $f) {
         if (array_key_exists($f, $data)) $s[$f] = trim((string)$data[$f]);
     }
     if ($s['title'] === '') json_error('标题不能为空');
 
-    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, season=?, episode=?, filename=? WHERE id=?');
-    $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['season'], $s['episode'], $s['filename'], $id]);
+    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, season=?, episode=? WHERE id=?');
+    $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['season'], $s['episode'], $id]);
 
     $md = "# {$s['title']}\n\n";
     if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
     if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
     $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
-    @file_put_contents(Config::$SOUPS_DIR . '/' . $s['filename'], $md);
+    $soupsDir = realpath(Config::$SOUPS_DIR);
+    $filePath = Config::$SOUPS_DIR . '/' . $s['filename'];
+    if ($soupsDir !== false && str_starts_with(realpath(dirname($filePath) ?: $filePath) ?: '', $soupsDir)) {
+        @file_put_contents($filePath, $md);
+    }
 
     log_admin_action('soup_update', "soup #$id", $s['title']);
     json_ok(['msg' => '已更新']);
@@ -314,8 +334,11 @@ function admin_soups_delete(int $id) {
     $s = $stmt->fetch();
     if (!$s) json_error('未找到', 404);
 
-    $file = Config::$SOUPS_DIR . '/' . $s['filename'];
-    if (is_file($file)) @unlink($file);
+    $soupsDir = realpath(Config::$SOUPS_DIR);
+    $filePath = Config::$SOUPS_DIR . '/' . $s['filename'];
+    if (is_file($filePath) && $soupsDir !== false && str_starts_with(realpath($filePath) ?: '', $soupsDir)) {
+        @unlink($filePath);
+    }
 
     $stmt = $pdo->prepare('DELETE FROM soups WHERE id = ?');
     $stmt->execute([$id]);
@@ -368,10 +391,17 @@ function admin_rooms_list() {
         $sql .= ' AND r.status = ?';
         $params[] = $status;
     }
-    $total = (int)$pdo->query("SELECT COUNT(*) $sql")->fetchColumn();
-
-    $stmt = $pdo->prepare("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.created_at, u.username AS host_name, s.title AS soup_title $sql ORDER BY r.id DESC LIMIT " . (($page - 1) * $perPage) . ", $perPage");
+    $stmt = $pdo->prepare("SELECT COUNT(*) $sql");
     $stmt->execute($params);
+    $total = (int)$stmt->fetchColumn();
+
+    $stmt = $pdo->prepare("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.created_at, u.username AS host_name, s.title AS soup_title $sql ORDER BY r.id DESC LIMIT :offset, :limit");
+    $stmt->bindValue(':offset', ($page - 1) * $perPage, PDO::PARAM_INT);
+    $stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
+    foreach ($params as $i => $p) {
+        $stmt->bindValue($i + 3, $p);
+    }
+    $stmt->execute();
     $rooms = $stmt->fetchAll();
 
     json_ok([
@@ -446,8 +476,6 @@ function admin_settings_get() {
             'ROOM_MSG_LIMIT' => Config::$ROOM_MSG_LIMIT,
             'POLL_INTERVAL' => Config::$POLL_INTERVAL,
             'CODE_TTL' => Config::$CODE_TTL,
-            'SOUPS_DIR' => Config::$SOUPS_DIR,
-            'DB_PATH' => Config::$DB_PATH,
         ],
     ]);
 }

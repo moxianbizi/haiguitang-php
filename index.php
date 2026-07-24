@@ -16,18 +16,17 @@ register_shutdown_function(function () {
             header('Content-Type: application/json; charset=utf-8');
             http_response_code(500);
         }
+        error_log("Fatal error: {$e['message']} in {$e['file']}:{$e['line']}");
         echo json_encode([
             'error' => '服务器内部错误',
-            'detail' => $e['message'],
-            'file' => basename($e['file']),
-            'line' => $e['line'],
         ], JSON_UNESCAPED_UNICODE);
     }
 });
 
 require_once __DIR__ . '/config.php';
 
-// PHP 7.4 兼容层（str_starts_with / str_ends_with / str_contains）
+ini_set('post_max_size', '10M');
+
 if (PHP_VERSION_ID < 80000) {
     require_once __DIR__ . '/lib/compat.php';
 }
@@ -65,6 +64,22 @@ if (!empty($_SERVER['HTTPS'])) {
 }
 session_name('hgt_sid');
 session_start();
+
+// Session 超时检查
+if (Config::$SESSION_TIMEOUT > 0 && !empty($_SESSION['login_time'])) {
+    if (time() - $_SESSION['login_time'] > Config::$SESSION_TIMEOUT) {
+        $_SESSION = [];
+        session_destroy();
+    }
+}
+
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+if (!empty($_SERVER['HTTPS'])) {
+    header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+}
 
 // CORS（同源通常不需要，部署到不同域名时打开）
 // header('Access-Control-Allow-Origin: *');

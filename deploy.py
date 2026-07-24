@@ -16,11 +16,11 @@ import sys
 import stat
 from ftplib import FTP, error_perm
 
-# ===================== 配置 =====================
-FTP_HOST = "154.219.117.63"
-FTP_PORT = 21
-FTP_USER = "seraacihel0nz6r"
-FTP_PASS = "GZLQBSA9P8WO"
+# ===================== 配置（从环境变量读取，请勿在此填写凭据） =====================
+FTP_HOST = os.environ.get("FTP_HOST", "")
+FTP_PORT = int(os.environ.get("FTP_PORT", "21"))
+FTP_USER = os.environ.get("FTP_USER", "")
+FTP_PASS = os.environ.get("FTP_PASS", "")
 
 # FTP 远程目标目录（站点根目录）
 REMOTE_DIR = "/home/hgt/web/hgt.dzol.vip/public_html"
@@ -78,6 +78,11 @@ def deploy():
     print(f"  FTP 服务器: {FTP_HOST}:{FTP_PORT}")
     print(f"  远程目录  : {REMOTE_DIR}")
     print("-" * 56)
+
+    if not FTP_HOST or not FTP_USER or not FTP_PASS:
+        print("错误: 请设置环境变量 FTP_HOST, FTP_USER, FTP_PASS")
+        print("用法: FTP_HOST=host FTP_USER=user FTP_PASS=pass python3 deploy.py")
+        sys.exit(1)
 
     # 连接 FTP
     print("[1/4] 连接 FTP 服务器...", end=" ", flush=True)

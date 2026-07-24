@@ -81,10 +81,12 @@ function soups_download(int $id) {
 
     if ($_SERVER['REQUEST_METHOD'] === 'HEAD') exit;
 
+    $soupsDir = realpath(Config::$SOUPS_DIR);
     $file = Config::$SOUPS_DIR . '/' . $s['filename'];
-    if (is_file($file)) {
+    $realFile = realpath($file);
+    if ($realFile !== false && $soupsDir !== false && str_starts_with($realFile, $soupsDir) && is_file($realFile)) {
         echo $bom;
-        readfile($file);
+        readfile($realFile);
     } else {
         // 动态生成
         $md = "# {$s['title']}\n\n";
@@ -131,7 +133,7 @@ function soups_create() {
     $id = (int)$pdo->lastInsertId();
 
     // 写 MD
-    @mkdir(Config::$SOUPS_DIR, 0777, true);
+    @mkdir(Config::$SOUPS_DIR, 0755, true);
     $md = "# {$title}\n\n";
     if ($season) $md .= "**季：**{$season}\n\n";
     if ($episode) $md .= "**集：**{$episode}\n\n";
@@ -145,7 +147,6 @@ function soups_create() {
 
 function soups_update(int $id) {
     $user = require_login();
-    if (!Config::$ALLOW_SUBMIT) json_error('暂未开放编辑');
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT * FROM soups WHERE id = ?');
     $stmt->execute([$id]);
@@ -156,6 +157,10 @@ function soups_update(int $id) {
     foreach (['title', 'surface', 'base', 'season', 'episode'] as $f) {
         if (array_key_exists($f, $data)) $s[$f] = trim((string)$data[$f]);
     }
+    if ($s['title'] === '') json_error('标题不能为空');
+    validate_length($s['surface'], 50000, '汤面');
+    validate_length($s['base'], 50000, '汤底');
+
     $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, season=?, episode=? WHERE id=?');
     $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['season'], $s['episode'], $id]);
 
@@ -164,7 +169,11 @@ function soups_update(int $id) {
     if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
     if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
     $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
-    @file_put_contents(Config::$SOUPS_DIR . '/' . $s['filename'], $md);
+    $soupsDir = realpath(Config::$SOUPS_DIR);
+    $filePath = Config::$SOUPS_DIR . '/' . $s['filename'];
+    if ($soupsDir !== false && str_starts_with(realpath(dirname($filePath) ?: $filePath) ?: '', $soupsDir)) {
+        @file_put_contents($filePath, $md);
+    }
 
     $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base FROM soups WHERE id = ?');
     $stmt->execute([$id]);

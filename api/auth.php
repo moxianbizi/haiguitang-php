@@ -21,21 +21,60 @@ function auth_register() {
 }
 
 function auth_login() {
+    // 登录频率限制：同一 IP 最多 5 次/分钟
+    if (!login_rate_limit()) {
+        json_error('登录尝试过于频繁，请稍后再试', 429);
+    }
+
     $data = body_json();
     $account = trim($data['account'] ?? '');
     $password = (string)($data['password'] ?? '');
     if ($account === '' || $password === '') json_error('账号或密码不能为空');
 
     $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT id, username, email, password_hash FROM users WHERE username = ? OR email = ?');
+    $stmt = $pdo->prepare('SELECT id, username, email, password_hash, is_admin, is_banned FROM users WHERE username = ? OR email = ?');
     $stmt->execute([$account, strtolower($account)]);
     $u = $stmt->fetch();
 
     if (!$u || !verify_password($password, $u['password_hash'])) {
         json_error('账号或密码错误', 401);
     }
+    if ((int)$u['is_admin'] !== 1 && isset($u['is_banned']) && (int)$u['is_banned'] === 1) {
+        json_error('账号已被封禁', 403);
+    }
+    session_regenerate_id(true);
     $_SESSION['user_id'] = (int)$u['id'];
+    $_SESSION['login_time'] = time();
     json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']]]);
+}
+
+function login_rate_limit(): bool {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $key = 'login_attempts_' . $ip;
+    $window = 60;
+    $maxAttempts = 5;
+    $now = time();
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT value FROM settings WHERE key = ?');
+    $stmt->execute([$key]);
+    $row = $stmt->fetch();
+
+    if ($row) {
+        $data = json_decode($row['value'], true) ?: ['count' => 0, 'window_start' => $now];
+        if ($now - $data['window_start'] > $window) {
+            $data = ['count' => 1, 'window_start' => $now];
+        } else {
+            $data['count']++;
+        }
+    } else {
+        $data = ['count' => 1, 'window_start' => $now];
+    }
+
+    $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
+    $stmt->execute([$key, json_encode($data)]);
+
+    return $data['count'] <= $maxAttempts;
 }
 
 function auth_logout() {

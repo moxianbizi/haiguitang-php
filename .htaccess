@@ -1,5 +1,13 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
+
+  # 禁止直接访问 data 目录和敏感文件
+  RewriteRule ^data/ - [R=404,L]
+  RewriteRule ^lib/ - [R=404,L]
+  RewriteRule ^config\.php$ - [R=404,L]
+  RewriteRule ^db\.php$ - [R=404,L]
+  RewriteRule ^\.git - [R=404,L]
+
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule ^ index.php [QSA,L]

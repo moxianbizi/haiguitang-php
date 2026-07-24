@@ -127,10 +127,11 @@ function rooms_select_soup(string $code) {
 }
 
 function rooms_send_message(string $code) {
-    $user = current_user();
+    $user = require_login();
     $data = body_json();
     $content = trim($data['content'] ?? '');
     if ($content === '') json_error('内容不能为空');
+    validate_length($content, 2000, '消息内容');
 
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT * FROM rooms WHERE code = ?');
@@ -144,11 +145,12 @@ function rooms_send_message(string $code) {
 }
 
 function rooms_ai_question(string $code) {
-    $user = current_user();
+    $user = require_login();
     $data = body_json();
     $content = trim($data['content'] ?? '');
     $api_key = (string)($data['api_key'] ?? '');
     if ($content === '') json_error('问题不能为空');
+    validate_length($content, 500, '问题内容');
 
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT * FROM rooms WHERE code = ?');

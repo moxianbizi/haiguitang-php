@@ -116,7 +116,37 @@ function verify_signed_code(string $email, string $token, string $code): bool {
 function sanitize_filename(string $s): string {
     $s = preg_replace('/[\\/:*?"<>|]+/', '_', $s);
     $s = preg_replace('/[\x00-\x1f\x7f]+/', '', $s);
+    $s = str_replace('..', '_', $s);
     $s = trim($s, ' ._-');
     if ($s === '') $s = 'untitled';
     return mb_substr($s, 0, 120);
+}
+
+/** CSRF Token 生成 */
+function csrf_token(): string {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+/** CSRF Token 校验（非 GET/HEAD 请求自动校验） */
+function csrf_check(): void {
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    if (in_array($method, ['GET', 'HEAD', 'OPTIONS'])) return;
+
+    $expected = $_SESSION['csrf_token'] ?? '';
+    if ($expected === '') return;
+
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['_csrf'] ?? '');
+    if (!hash_equals($expected, $token)) {
+        json_error('CSRF 校验失败，请刷新页面重试', 403);
+    }
+}
+
+/** 输入长度校验 */
+function validate_length(string $value, int $max, string $field = '输入'): void {
+    if (mb_strlen($value) > $max) {
+        json_error("{$field}不能超过 {$max} 个字符");
+    }
 }

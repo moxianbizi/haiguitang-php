@@ -21,11 +21,9 @@ class DB {
             } catch (PDOException $e) {
                 http_response_code(500);
                 header('Content-Type: application/json; charset=utf-8');
+                error_log("Database connection failed: {$e->getMessage()}");
                 echo json_encode([
                     'error' => '数据库连接失败',
-                    'detail' => $e->getMessage(),
-                    'db_path' => $path,
-                    'dir_writable' => is_writable($dir) ? 'yes' : 'no',
                 ], JSON_UNESCAPED_UNICODE);
                 exit;
             }
