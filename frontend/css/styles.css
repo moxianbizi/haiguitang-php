@@ -125,6 +125,7 @@ input, textarea {
 /* Header */
 .header {
   padding: 14px 0;
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
   position: sticky;
   top: 0;
   z-index: 50;
@@ -1776,7 +1777,8 @@ input, textarea {
 
   .modal {
     width: 100vw;
-    max-height: 92vh;
+    max-height: 100vh;
+    max-height: 100dvh;
     border-radius: var(--radius) var(--radius) 0 0;
     left: 0;
     top: auto;
@@ -1791,11 +1793,27 @@ input, textarea {
     opacity: 1;
   }
 
-  .modal-header,
-  .modal-body,
+  .modal-header {
+    padding: 16px 20px 12px;
+  }
+
+  .modal-title {
+    font-size: 1.2rem;
+  }
+
+  .modal-body {
+    padding: 16px 20px;
+  }
+
   .modal-actions {
-    padding-left: 20px;
-    padding-right: 20px;
+    padding: 12px 20px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .modal-actions .btn {
+    padding: 10px 12px;
+    font-size: 0.85rem;
+    min-width: 0;
   }
 
   .stats-bar {
