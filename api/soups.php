@@ -15,10 +15,11 @@ function handle_soups(array $segments) {
     if ($id <= 0) json_error('Not Found', 404);
     $sub = $segments[2] ?? '';
 
-    if ($_SERVER['REQUEST_METHOD'] === 'GET' && $sub === '') soups_detail($id);
-    elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && $sub === 'download') soups_download($id);
-    elseif ($_SERVER['REQUEST_METHOD'] === 'PUT' && $sub === '') soups_update($id);
-    elseif ($_SERVER['REQUEST_METHOD'] === 'DELETE' && $sub === '') soups_delete($id);
+    $method = $_SERVER['REQUEST_METHOD'];
+    if ($method === 'GET' && $sub === '') soups_detail($id);
+    elseif (($method === 'GET' || $method === 'HEAD') && $sub === 'download') soups_download($id);
+    elseif ($method === 'PUT' && $sub === '') soups_update($id);
+    elseif ($method === 'DELETE' && $sub === '') soups_delete($id);
     else json_error('Not Found', 404);
 }
 
@@ -71,8 +72,9 @@ function soups_download(int $id) {
     $file = Config::$SOUPS_DIR . '/' . $s['filename'];
     if (is_file($file)) {
         header('Content-Type: text/markdown; charset=utf-8');
-        $safeName = str_replace('"', '', $s['filename']);
+        $safeName = str_replace(["\r", "\n", '"', '\\'], '', $s['filename']);
         header('Content-Disposition: attachment; filename="' . $safeName . '"');
+        if ($_SERVER['REQUEST_METHOD'] === 'HEAD') exit;
         readfile($file);
         exit;
     }
@@ -83,8 +85,9 @@ function soups_download(int $id) {
     if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
     $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
     header('Content-Type: text/markdown; charset=utf-8');
-    $safeName = str_replace('"', '', $s['filename']);
+    $safeName = str_replace(["\r", "\n", '"', '\\'], '', $s['filename']);
     header('Content-Disposition: attachment; filename="' . $safeName . '"');
+    if ($_SERVER['REQUEST_METHOD'] === 'HEAD') exit;
     echo $md;
     exit;
 }

@@ -13,21 +13,7 @@ function handle_auth(array $segments) {
 }
 
 function auth_send_code() {
-    $data = body_json();
-    $email = strtolower(trim($data['email'] ?? ''));
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        json_error('邮箱格式不正确');
-    }
-
-    $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT id FROM users WHERE email = ?');
-    $stmt->execute([$email]);
-    if ($stmt->fetch()) {
-        json_error('该邮箱已注册', 409);
-    }
-
-    [$ok, $msg, $token] = send_verification_code($email);
-    json_ok(['msg' => $msg, 'token' => $token]);
+    json_error('注册暂未开放，如需账号请前往交流群寻找管理员');
 }
 
 function auth_register() {

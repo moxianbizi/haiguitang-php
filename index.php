@@ -173,8 +173,9 @@ function serve_static(string $uri) {
 
     $target = $frontend . '/' . $clean;
     // 防目录穿越
+    $realFrontend = realpath($frontend);
     $real = realpath($target);
-    if ($real && str_starts_with($real, realpath($frontend))) {
+    if ($realFrontend && $real && str_starts_with($real, $realFrontend)) {
         if (is_file($real)) {
             readfile_static($real);
             return;

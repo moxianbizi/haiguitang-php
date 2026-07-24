@@ -100,8 +100,9 @@ const KeyMgr = {
     if (!k) return { ok: false, msg: "请先填写 Key" };
     if (!store.soups.length) await loadSoups();
     if (!store.soups.length) return { ok: false, msg: "汤数据未加载，无法测试" };
+    const testSoup = store.soups.find((s) => s.base) || store.soups[0];
     const { ok, data } = await API.post("/api/ai/ask", {
-      soup_id: store.soups[0].id,
+      soup_id: testSoup.id,
       question: "测试",
       api_key: k,
     });
@@ -703,10 +704,11 @@ async function renderRoom(code) {
             <button class="btn-icon" onclick="location.hash='#/rooms'" title="离开">←</button>
           </div>
           <div class="chat-body" id="chatBody"></div>
+          ${room.status === "ended" ? `<div class="chat-ended-notice">房间已结束，无法继续发言</div>` : ""}
           <div class="chat-input">
-            <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendChat()" />
-            <button class="btn btn-secondary" style="min-width:auto;flex:0 0 auto;padding:0 14px" onclick="sendChat()" title="发送">💬</button>
-            ${room.ai_enabled ? `<button class="btn btn-primary" style="min-width:auto;flex:0 0 auto;padding:0 14px" onclick="sendAiQuestion()" title="向AI提问">🤖</button>` : ""}
+            <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendChat()" ${room.status === "ended" ? "disabled" : ""} />
+            <button class="btn btn-secondary" onclick="sendChat()" title="发送" ${room.status === "ended" ? "disabled" : ""}>💬</button>
+            ${room.ai_enabled && room.status !== "ended" ? `<button class="btn btn-primary" onclick="sendAiQuestion()" title="向AI提问">🤖</button>` : ""}
           </div>
         </div>
         <div class="room-side">
@@ -953,7 +955,7 @@ function closeSettings(e) {
     btn.classList.toggle("has-key", KeyMgr.has());
   }
   // 如果在首页，刷新统计栏
-  if (location.hash.replace(/^#/, "") === "/" || location.hash === "") {
+  if ((location.hash.replace(/^#/, "") === "/" || location.hash === "") && typeof renderStats === "function") {
     renderStats();
   }
 }
