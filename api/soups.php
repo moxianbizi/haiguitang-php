@@ -69,26 +69,30 @@ function soups_download(int $id) {
     $s = $stmt->fetch();
     if (!$s) json_error('未找到', 404);
 
+    // 文件名用 RFC 5987 编码，兼容中文
+    $safeName = str_replace(["\r", "\n", '"', '\\'], '', $s['filename']);
+    $encodedName = rawurlencode($safeName);
+
+    header('Content-Type: text/markdown; charset=utf-8');
+    header("Content-Disposition: attachment; filename=\"{$encodedName}\"; filename*=UTF-8''{$encodedName}");
+
+    // UTF-8 BOM，确保 Windows 记事本正确识别编码
+    $bom = "\xEF\xBB\xBF";
+
+    if ($_SERVER['REQUEST_METHOD'] === 'HEAD') exit;
+
     $file = Config::$SOUPS_DIR . '/' . $s['filename'];
     if (is_file($file)) {
-        header('Content-Type: text/markdown; charset=utf-8');
-        $safeName = str_replace(["\r", "\n", '"', '\\'], '', $s['filename']);
-        header('Content-Disposition: attachment; filename="' . $safeName . '"');
-        if ($_SERVER['REQUEST_METHOD'] === 'HEAD') exit;
+        echo $bom;
         readfile($file);
-        exit;
+    } else {
+        // 动态生成
+        $md = "# {$s['title']}\n\n";
+        if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
+        if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
+        $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
+        echo $bom . $md;
     }
-
-    // 动态生成
-    $md = "# {$s['title']}\n\n";
-    if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
-    if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
-    $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
-    header('Content-Type: text/markdown; charset=utf-8');
-    $safeName = str_replace(["\r", "\n", '"', '\\'], '', $s['filename']);
-    header('Content-Disposition: attachment; filename="' . $safeName . '"');
-    if ($_SERVER['REQUEST_METHOD'] === 'HEAD') exit;
-    echo $md;
     exit;
 }
 
