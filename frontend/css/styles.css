@@ -2145,14 +2145,21 @@ input, textarea {
 @media (max-width: 768px) {
   .admin-layout {
     flex-direction: column;
+    gap: 0;
+    padding-top: 12px;
   }
 
   .admin-sidebar {
+    flex: 0 0 auto;
+    width: 100%;
     flex-direction: row;
     overflow-x: auto;
     position: static;
-    gap: 6px;
-    padding-bottom: 8px;
+    top: auto;
+    gap: 4px;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     scrollbar-width: none;
   }
 
@@ -2160,18 +2167,36 @@ input, textarea {
 
   .admin-nav-item {
     flex-shrink: 0;
-    border-left: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 999px;
+    border-left: none !important;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.82rem;
+    white-space: nowrap;
   }
 
   .admin-nav-item.active {
-    border-left: none;
-    border-bottom-color: var(--accent);
+    border-left: none !important;
+    border-bottom: none;
+    background: rgba(110, 231, 255, 0.15);
   }
 
   .admin-table {
-    font-size: 0.78rem;
+    font-size: 0.75rem;
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .admin-table::-webkit-scrollbar { display: none; }
+
+  .admin-table thead,
+  .admin-table tbody,
+  .admin-table tr {
+    display: table;
+    table-layout: auto;
+    width: max-content;
   }
 
   .admin-table th,
@@ -2184,12 +2209,53 @@ input, textarea {
     align-items: stretch;
   }
 
-  .admin-search {
+  .admin-toolbar-right {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .admin-search,
+  .admin-select {
     min-width: 0;
-    flex: 1;
+    width: 100%;
+  }
+
+  .admin-btn-sm {
+    width: 100%;
+  }
+
+  .admin-stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .admin-stat-card {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .admin-stat-icon {
+    font-size: 1.3rem;
+  }
+
+  .admin-stat-value {
+    font-size: 1rem;
+  }
+
+  .admin-actions {
+    gap: 4px;
+  }
+
+  .admin-act-btn {
+    padding: 3px 6px;
+    font-size: 0.7rem;
   }
 
   .admin-msg-content {
-    max-width: 150px;
+    max-width: 100px;
+  }
+
+  .admin-main {
+    padding-bottom: 40px;
   }
 }
