@@ -185,6 +185,13 @@ function serve_static(string $uri) {
     $frontend = __DIR__ . '/frontend';
     $clean = ltrim($uri, '/');
 
+    // 禁止直接访问 data/ lib/ 目录
+    if (str_starts_with($clean, 'data/') || str_starts_with($clean, 'lib/') || $clean === 'data' || $clean === 'lib') {
+        http_response_code(404);
+        echo '404 Not Found';
+        return;
+    }
+
     if ($clean === '' || $clean === '/') {
         readfile_static($frontend . '/index.html');
         return;
