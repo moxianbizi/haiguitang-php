@@ -59,10 +59,16 @@ function soups_detail(int $id) {
     $stmt->execute([$id]);
     $s = $stmt->fetch();
     if (!$s) json_error('未找到', 404);
+    // 汤底（答案）仅登录用户可见
+    if (!isset($_SESSION['user_id'])) {
+        unset($s['base']);
+    }
     json_ok($s);
 }
 
 function soups_download(int $id) {
+    // 下载含汤底，必须登录
+    require_login();
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT * FROM soups WHERE id = ?');
     $stmt->execute([$id]);

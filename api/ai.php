@@ -8,6 +8,7 @@ function handle_ai(array $segments) {
 }
 
 function ai_ask() {
+    require_login();
     $data = body_json();
     $soup_id = (int)($data['soup_id'] ?? 0);
     $question = trim($data['question'] ?? '');

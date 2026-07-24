@@ -52,6 +52,7 @@ const store = {
   search: "",
   season: "",
   aiKey: localStorage.getItem("hgt_deepseek_key") || "",
+  csrfToken: "",
   // 单人模式每碗汤的问答历史（按 soup_id 存）
   aiHistory: {},
   pollTimer: null,
@@ -65,9 +66,11 @@ const API = {
     return r;
   },
   async json(path, opts = {}) {
+    const headers = { "Content-Type": "application/json", ...opts.headers };
+    if (store.csrfToken) headers["X-CSRF-Token"] = store.csrfToken;
     const r = await fetch(path, {
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers,
       ...opts,
     });
     let data;
@@ -432,13 +435,13 @@ function renderSoupPageContent(soup) {
 
         <div class="section-label base">
           <span>汤底</span>
-          <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
+          ${soup.base ? `<button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>` : (store.user ? `<span class="text-muted">暂无汤底</span>` : `<a href="#/auth" class="text-muted">登录后查看汤底</a>`)}
         </div>
-        <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base || "（暂无汤底）")}</div>
+        ${soup.base ? `<div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base)}</div>` : ''}
 
         <div class="soup-detail-actions">
           <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
-          <a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>
+          ${store.user ? `<a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>` : ''}
         </div>
       </div>
       <div id="modalRoot"></div>
@@ -608,6 +611,7 @@ window.doLogin = async () => {
   const { ok, data } = await API.post("/api/auth/login", { account, password });
   if (!ok) { setFormMsg(data.error || "登录失败"); return; }
   store.user = data.user;
+  if (data.csrf_token) store.csrfToken = data.csrf_token;
   toast("登录成功", "ok");
   location.hash = "#/";
 };
@@ -767,7 +771,7 @@ async function renderRoom(code) {
                 ? `<div class="soup-mini"><div class="t">${escapeHtml(soup.title)}</div><div class="s">${escapeHtml(soup.season)}${soup.episode ? " · " + escapeHtml(soup.episode) : ""}</div><div class="surface">${escapeHtml(soup.surface || "")}</div></div>`
                 : `<div class="no-soup">尚未选汤</div>`
             }</div>
-            ${room.host?.id === store.user?.id ? `<button class="select-soup-btn" onclick="pickSoupForRoomUpdate('${escapeHtml(room.code)}')">${soup ? "换一碗汤" : "选择一碗汤"}</button>` : ""}
+            ${room.host?.id === store.user?.id ? `<button class="select-soup-btn" onclick="pickSoupForRoomUpdate('${escapeJs(room.code)}')">${soup ? "换一碗汤" : "选择一碗汤"}</button>` : ""}
           </div>
           <div class="side-card">
             <h4>玩法</h4>
@@ -1198,8 +1202,8 @@ async function adminUsers(page = 1) {
               <td class="admin-actions">
                 <button class="admin-act-btn" onclick="adminUserToggleAdmin(${u.id}, ${u.is_admin})">${u.is_admin ? '取消管理' : '设为管理'}</button>
                 <button class="admin-act-btn" onclick="adminUserToggleBan(${u.id}, ${u.is_banned})">${u.is_banned ? '解封' : '封禁'}</button>
-                <button class="admin-act-btn" onclick="adminUserResetPwdModal(${u.id}, '${escapeHtml(u.username)}')">重置密码</button>
-                ${u.id !== store.user.id ? `<button class="admin-act-btn danger" onclick="adminUserDelete(${u.id}, '${escapeHtml(u.username)}')">删除</button>` : ''}
+                <button class="admin-act-btn" onclick="adminUserResetPwdModal(${u.id}, '${escapeJs(u.username)}')">重置密码</button>
+                ${u.id !== store.user.id ? `<button class="admin-act-btn danger" onclick="adminUserDelete(${u.id}, '${escapeJs(u.username)}')">删除</button>` : ''}
               </td>
             </tr>
           `).join("")}
@@ -1333,7 +1337,7 @@ async function adminSoups(page = 1) {
               <td>${escapeHtml(s.filename)}</td>
               <td class="admin-actions">
                 <button class="admin-act-btn" onclick="adminSoupEditModal(${s.id})">编辑</button>
-                <button class="admin-act-btn danger" onclick="adminSoupDelete(${s.id}, '${escapeHtml(s.title)}')">删除</button>
+                <button class="admin-act-btn danger" onclick="adminSoupDelete(${s.id}, '${escapeJs(s.title)}')">删除</button>
               </td>
             </tr>
           `).join("")}
@@ -1445,9 +1449,9 @@ async function adminRooms(page = 1) {
               <td>${r.ai_enabled ? '✅' : '❌'}</td>
               <td>${escapeHtml(r.created_at)}</td>
               <td class="admin-actions">
-                <button class="admin-act-btn" onclick="adminRoomToggleStatus(${r.id}, '${r.status}')">${r.status === 'playing' ? '结束' : '恢复'}</button>
-                <button class="admin-act-btn" onclick="adminRoomMessages(${r.id}, '${escapeHtml(r.code)}')">消息</button>
-                <button class="admin-act-btn danger" onclick="adminRoomDelete(${r.id}, '${escapeHtml(r.code)}')">删除</button>
+                <button class="admin-act-btn" onclick="adminRoomToggleStatus(${r.id}, '${escapeJs(r.status)}')">${r.status === 'playing' ? '结束' : '恢复'}</button>
+                <button class="admin-act-btn" onclick="adminRoomMessages(${r.id}, '${escapeJs(r.code)}')">消息</button>
+                <button class="admin-act-btn danger" onclick="adminRoomDelete(${r.id}, '${escapeJs(r.code)}')">删除</button>
               </td>
             </tr>
           `).join("")}
@@ -1681,6 +1685,7 @@ async function boot() {
   // 拉取用户状态
   const { ok, data } = await API.json("/api/auth/me");
   if (ok && data.user) store.user = data.user;
+  if (data && data.csrf_token) store.csrfToken = data.csrf_token;
   // 预加载汤列表（用于房间选汤）
   API.json("/api/soups").then(({ ok, data }) => {
     if (ok) { store.soups = data.soups || []; store.seasons = data.seasons || []; applyFilters(); }

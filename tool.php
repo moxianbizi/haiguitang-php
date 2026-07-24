@@ -34,8 +34,12 @@ $isAdmin = $admin && (int)$admin['is_admin'] === 1;
 
 // 支持 token 参数免 session（可选，配置 Config::$TOOL_TOKEN 后可用）
 $tokenOk = false;
-if (!empty(Config::$TOOL_TOKEN) && ($_GET['token'] ?? $_POST['token'] ?? '') === Config::$TOOL_TOKEN) {
-    $tokenOk = true;
+if (!empty(Config::$TOOL_TOKEN)) {
+    // 仅接受 POST/HEADER 传 token，禁止 GET（避免泄露到日志/Referer）
+    $token = $_POST['token'] ?? ($_SERVER['HTTP_X_TOOL_TOKEN'] ?? '');
+    if ($token !== '' && hash_equals(Config::$TOOL_TOKEN, $token)) {
+        $tokenOk = true;
+    }
 }
 
 if (!$isAdmin && !$tokenOk) {
@@ -55,6 +59,16 @@ $action = $_GET['action'] ?? 'index';
 
 if ($action === 'do') {
     header('Content-Type: application/json; charset=utf-8');
+    // CSRF 校验（复用主应用 session token）；token 模式下豁免
+    if (!$tokenOk) {
+        csrf_token(); // 确保初始化
+        $expected = $_SESSION['csrf_token'] ?? '';
+        $got = $_POST['_csrf'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+        if ($expected === '' || $got === '' || !hash_equals($expected, $got)) {
+            echo json_encode(['ok' => false, 'error' => 'CSRF 校验失败，请刷新页面重试']);
+            exit;
+        }
+    }
     $op = $_POST['op'] ?? '';
     handle_action($op);
     exit;
@@ -82,7 +96,7 @@ function handle_action(string $op) {
             case 'git_pull':
                 $branch = git_branch();
                 $before = trim(run_shell('git rev-parse HEAD 2>&1'));
-                $pullOut = run_shell("git pull origin $branch 2>&1");
+                $pullOut = run_shell('git pull origin ' . escapeshellarg($branch) . ' 2>&1');
                 $after = trim(run_shell('git rev-parse HEAD 2>&1'));
                 $result['output'] = "分支: $branch\n拉取前: $before\n拉取后: $after\n\n---- git pull 输出 ----\n$pullOut\n";
                 if ($before === $after) {
@@ -100,7 +114,7 @@ function handle_action(string $op) {
                 break;
             case 'git_stash':
                 $branch = git_branch();
-                $result['output'] = run_shell("git stash && git pull origin $branch && git stash pop 2>&1");
+                $result['output'] = run_shell('git stash && git pull origin ' . escapeshellarg($branch) . ' && git stash pop 2>&1');
                 break;
             case 'clear_cache':
                 $count = 0;
@@ -138,11 +152,12 @@ function handle_action(string $op) {
                 $fetchOut = run_shell('git fetch origin 2>&1');
                 $branch = git_branch();
                 $current = trim(run_shell('git rev-parse HEAD 2>&1'));
-                $remoteRef = "origin/$branch";
-                $remote = trim(run_shell("git rev-parse $remoteRef 2>&1"));
+                $remoteRef = 'origin/' . $branch; // 仅用于显示
+                $remoteRefArg = escapeshellarg("origin/$branch");
+                $remote = trim(run_shell("git rev-parse $remoteRefArg 2>&1"));
                 // 落后/领先提交数
-                $behind = trim(run_shell("git rev-list HEAD..$remoteRef --count 2>&1"));
-                $ahead = trim(run_shell("git rev-list $remoteRef..HEAD --count 2>&1"));
+                $behind = trim(run_shell("git rev-list HEAD..$remoteRefArg --count 2>&1"));
+                $ahead = trim(run_shell("git rev-list $remoteRefArg..HEAD --count 2>&1"));
                 $behind = $behind === '' || !ctype_digit($behind) ? '?' : $behind;
                 $ahead = $ahead === '' || !ctype_digit($ahead) ? '?' : $ahead;
                 $result['output'] = "分支: $branch\n当前 HEAD: $current\n远程 $remoteRef: $remote\n落后: $behind 个提交 · 领先: $ahead 个提交\n";
@@ -202,6 +217,7 @@ function git_branch(): string {
 // ===================== 页面渲染 =====================
 function render_page(?array $admin) {
     $username = $admin['username'] ?? 'token';
+    $csrf = csrf_token();
     header('Content-Type: text/html; charset=utf-8');
 ?>
 <!DOCTYPE html>
@@ -361,6 +377,7 @@ async function run(op) {
   try {
     const fd = new FormData();
     fd.append('op', op);
+    fd.append('_csrf', <?= json_encode($csrf) ?>);
     const r = await fetch('?action=do', { method: 'POST', body: fd });
     const data = await r.json();
     document.getElementById('outputLabel').textContent = labels[op] || op;

@@ -13,12 +13,12 @@ function handle_rooms(array $segments) {
     $code = strtoupper($action);
     $sub = $segments[2] ?? '';
 
-    if ($_SERVER['REQUEST_METHOD'] === 'GET' && $sub === '') rooms_get($code);
+    if ($_SERVER['REQUEST_METHOD'] === 'GET' && $sub === '') { require_login(); rooms_get($code); }
     elseif ($_SERVER['REQUEST_METHOD'] === 'DELETE' && $sub === '') rooms_close($code);
     elseif ($sub === 'select-soup' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_select_soup($code);
     elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_send_message($code);
     elseif ($sub === 'ai-question' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_ai_question($code);
-    elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'GET') rooms_poll_messages($code);
+    elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'GET') { require_login(); rooms_poll_messages($code); }
     else json_error('Not Found', 404);
 }
 
@@ -49,6 +49,7 @@ function rooms_create() {
 }
 
 function rooms_list() {
+    require_login();
     $pdo = DB::pdo();
     $stmt = $pdo->query("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.created_at, u.username AS host_name FROM rooms r LEFT JOIN users u ON r.host_id = u.id WHERE r.status = 'playing' ORDER BY r.created_at DESC LIMIT 50");
     $rooms = $stmt->fetchAll();

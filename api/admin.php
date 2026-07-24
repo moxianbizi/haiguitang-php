@@ -119,6 +119,10 @@ function admin_users_create() {
     $password = (string)($data['password'] ?? '');
     $is_admin = !empty($data['is_admin']) ? 1 : 0;
     if ($username === '' || $email === '' || strlen($password) < 8) json_error('用户名、邮箱不能为空，密码至少 8 位');
+    // 用户名字符白名单：中英文/数字/下划线，2-32 位，防止 XSS/注入
+    if (!preg_match('/^[\w\x{4e00}-\x{9fa5}]{2,32}$/u', $username)) {
+        json_error('用户名只能含中英文/数字/下划线，2-32 位');
+    }
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
 
     $pdo = DB::pdo();
@@ -166,6 +170,9 @@ function admin_users_update(int $id) {
     if (array_key_exists('username', $data)) {
         $newName = trim($data['username']);
         if ($newName !== '' && $newName !== $u['username']) {
+            if (!preg_match('/^[\w\x{4e00}-\x{9fa5}]{2,32}$/u', $newName)) {
+                json_error('用户名只能含中英文/数字/下划线，2-32 位');
+            }
             $stmt = $pdo->prepare('UPDATE users SET username = ? WHERE id = ?');
             $stmt->execute([$newName, $id]);
             $changes[] = "username: {$u['username']} -> $newName";
@@ -492,7 +499,12 @@ function admin_settings_update() {
             $updated[] = 'allow_submit';
         }
         if ($k === 'room_msg_limit') {
-            Config::$ROOM_MSG_LIMIT = (int)$v;
+            $limit = (int)$v;
+            // 0=不限；否则限定在 [10, 1000] 防止过大值导致 DoS
+            if ($limit !== 0 && ($limit < 10 || $limit > 1000)) {
+                json_error('room_msg_limit 只能为 0（不限）或 10-1000');
+            }
+            Config::$ROOM_MSG_LIMIT = $limit;
             $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
             $stmt->execute(['room_msg_limit', (string)Config::$ROOM_MSG_LIMIT]);
             $updated[] = 'room_msg_limit';

@@ -6,9 +6,17 @@
   RewriteRule ^lib/ - [R=404,L]
   RewriteRule ^config\.php$ - [R=404,L]
   RewriteRule ^db\.php$ - [R=404,L]
+  RewriteRule ^router\.php$ - [R=404,L]
   RewriteRule ^\.git - [R=404,L]
+  RewriteRule ^\.env - [R=404,L]
 
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule ^ index.php [QSA,L]
 </IfModule>
+
+# 双保险：阻止数据库与备份文件被直接访问（即便 rewrite 未命中）
+<FilesMatch "\.(db|db-wal|db-shm|sqlite|sqlite3|bak|swp|md~|env|log)$">
+  Require all denied
+</FilesMatch>
+

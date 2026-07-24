@@ -122,7 +122,7 @@ function sanitize_filename(string $s): string {
     return mb_substr($s, 0, 120);
 }
 
-/** CSRF Token 生成 */
+/** CSRF Token 生成（session 启动后应立即调用一次以初始化） */
 function csrf_token(): string {
     if (empty($_SESSION['csrf_token'])) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -130,16 +130,29 @@ function csrf_token(): string {
     return $_SESSION['csrf_token'];
 }
 
-/** CSRF Token 校验（非 GET/HEAD 请求自动校验） */
-function csrf_check(): void {
+/**
+ * CSRF Token 校验（非 GET/HEAD/OPTIONS 请求自动校验）
+ * @param array $exempt 需要豁免的路径前缀（如登录前接口 ['auth/login','auth/send-code','auth/register']）
+ */
+function csrf_check(array $exempt = []): void {
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     if (in_array($method, ['GET', 'HEAD', 'OPTIONS'])) return;
 
+    // 当前 API 路径（相对于 /api/）
+    $uri = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+    $path = ltrim(substr($uri, strpos($uri, '/api/') + 5), '/');
+    foreach ($exempt as $p) {
+        if ($path === $p || str_starts_with($path, rtrim($p, '/'))) return;
+    }
+
     $expected = $_SESSION['csrf_token'] ?? '';
-    if ($expected === '') return;
+    // 已有 session 但未生成 token：生成一个（确保登录用户一定有 token）
+    if ($expected === '') {
+        $expected = csrf_token();
+    }
 
     $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['_csrf'] ?? '');
-    if (!hash_equals($expected, $token)) {
+    if ($token === '' || !hash_equals($expected, $token)) {
         json_error('CSRF 校验失败，请刷新页面重试', 403);
     }
 }

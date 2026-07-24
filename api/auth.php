@@ -42,10 +42,13 @@ function auth_login() {
     if ((int)$u['is_admin'] !== 1 && isset($u['is_banned']) && (int)$u['is_banned'] === 1) {
         json_error('账号已被封禁', 403);
     }
+    // 防止会话固定：登录后重新生成 session id
     session_regenerate_id(true);
     $_SESSION['user_id'] = (int)$u['id'];
     $_SESSION['login_time'] = time();
-    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']]]);
+    // regenerate 后需重新生成 csrf token
+    unset($_SESSION['csrf_token']);
+    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']], 'csrf_token' => csrf_token()]);
 }
 
 function login_rate_limit(): bool {
@@ -87,8 +90,8 @@ function auth_me() {
     $u = current_user();
     if (!$u) {
         http_response_code(401);
-        echo json_encode(['user' => null], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['user' => null, 'csrf_token' => csrf_token()], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']]]);
+    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']], 'csrf_token' => csrf_token()]);
 }

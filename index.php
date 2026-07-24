@@ -39,9 +39,9 @@ if (!is_dir($__dataDir)) {
 if (!is_writable($__dataDir)) {
     header('Content-Type: application/json; charset=utf-8');
     http_response_code(500);
+    error_log('data 目录不可写: ' . $__dataDir);
     echo json_encode([
-        'error' => 'data 目录不可写',
-        'detail' => "路径: {$__dataDir}，请执行 chmod 775 或调整属主",
+        'error' => 'data 目录不可写，请联系管理员',
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -139,6 +139,12 @@ function route_api(string $path) {
     require_once __DIR__ . '/lib/util.php';
     require_once __DIR__ . '/lib/mail.php';
     require_once __DIR__ . '/lib/ai.php';
+
+    // 初始化 CSRF token（确保 session 里有 token）
+    csrf_token();
+
+    // CSRF 校验：豁免登录前接口（注册暂未开放，但保留豁免）
+    csrf_check(['auth/login', 'auth/send-code', 'auth/register']);
 
     // 首次访问自动导入汤
     try {
