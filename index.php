@@ -3,11 +3,58 @@
  * 海龟汤馆 · 入口路由
  * 所有 /api/* 走这里，其他路径回退到前端静态文件
  */
+
+// 全局错误捕获：把致命错误转成 JSON 而不是空白 500
+set_error_handler(function ($severity, $message, $file, $line) {
+    if (!(error_reporting() & $severity)) return;
+    throw new ErrorException($message, 0, $severity, $file, $line);
+});
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code(500);
+        }
+        echo json_encode([
+            'error' => '服务器内部错误',
+            'detail' => $e['message'],
+            'file' => basename($e['file']),
+            'line' => $e['line'],
+        ], JSON_UNESCAPED_UNICODE);
+    }
+});
+
 require_once __DIR__ . '/config.php';
 
 // PHP 7.4 兼容层（str_starts_with / str_ends_with / str_contains）
 if (PHP_VERSION_ID < 80000) {
     require_once __DIR__ . '/lib/compat.php';
+}
+
+// 环境检查：确保 data 目录可写
+$__dataDir = dirname(Config::$DB_PATH);
+if (!is_dir($__dataDir)) {
+    @mkdir($__dataDir, 0775, true);
+}
+if (!is_writable($__dataDir)) {
+    header('Content-Type: application/json; charset=utf-8');
+    http_response_code(500);
+    echo json_encode([
+        'error' => 'data 目录不可写',
+        'detail' => "路径: {$__dataDir}，请执行 chmod 775 或调整属主",
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+// 检查 PDO SQLite
+if (!extension_loaded('pdo_sqlite')) {
+    header('Content-Type: application/json; charset=utf-8');
+    http_response_code(500);
+    echo json_encode([
+        'error' => '缺少 PDO_SQLite 扩展',
+        'detail' => '请联系主机商启用 PHP 的 pdo_sqlite 扩展',
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 // session 配置

@@ -13,10 +13,22 @@ class DB {
             $path = Config::$DB_PATH;
             $dir = dirname($path);
             if (!is_dir($dir)) {
-                @mkdir($dir, 0777, true);
+                @mkdir($dir, 0775, true);
             }
-            $dsn = 'sqlite:' . $path;
-            self::$pdo = new PDO($dsn);
+            try {
+                $dsn = 'sqlite:' . $path;
+                self::$pdo = new PDO($dsn);
+            } catch (PDOException $e) {
+                http_response_code(500);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'error' => '数据库连接失败',
+                    'detail' => $e->getMessage(),
+                    'db_path' => $path,
+                    'dir_writable' => is_writable($dir) ? 'yes' : 'no',
+                ], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
             self::$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             self::$pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
             self::$pdo->exec('PRAGMA journal_mode = WAL');
