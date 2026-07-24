@@ -149,6 +149,10 @@ function route_api(string $path) {
             require_once __DIR__ . '/api/ai.php';
             handle_ai($segments);
             break;
+        case 'admin':
+            require_once __DIR__ . '/api/admin.php';
+            handle_admin($segments);
+            break;
         case 'poll':
             require_once __DIR__ . '/api/poll.php';
             handle_poll($segments);

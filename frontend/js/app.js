@@ -131,6 +131,7 @@ function route() {
   if (hash === "/rooms") return renderRooms();
   if (hash.startsWith("/room/")) return renderRoom(hash.slice("/room/".length));
   if (hash === "/profile") return renderProfile();
+  if (hash.startsWith("/admin")) return renderAdmin(hash);
   renderHome();
 }
 
@@ -151,6 +152,7 @@ function headerHtml(active = "") {
           <a href="#/" class="nav-item ${active === "home" ? "active" : ""}">汤馆</a>
           <a href="#/rooms" class="nav-item ${active === "rooms" ? "active" : ""}">房间</a>
           ${u ? `<a href="#/profile" class="nav-item ${active === "profile" ? "active" : ""}">我的</a>` : ""}
+          ${u && u.is_admin ? `<a href="#/admin" class="nav-item ${active === "admin" ? "active" : ""}">后台</a>` : ""}
         </nav>
         <div class="header-actions">
           <button class="btn-icon ${keyOk ? "has-key" : ""}" onclick="openSettings()" title="AI 设置">⚙</button>
@@ -164,6 +166,7 @@ function headerHtml(active = "") {
         <a href="#/" class="${active === "home" ? "active" : ""}">🏠 汤馆</a>
         <a href="#/rooms" class="${active === "rooms" ? "active" : ""}">🎮 房间</a>
         ${u ? `<a href="#/profile" class="${active === "profile" ? "active" : ""}">👤 我的</a>` : ""}
+        ${u && u.is_admin ? `<a href="#/admin" class="${active === "admin" ? "active" : ""}">⚙ 后台</a>` : ""}
       </div>
     </header>
   `;
@@ -991,6 +994,635 @@ window.testKey = async () => {
     KeyMgr.set(v);
   }
 };
+
+// ---------- 管理员后台 ----------
+const AdminAPI = {
+  async get(path) { return API.json(path); },
+  async post(path, body) { return API.post(path, body); },
+  async put(path, body) { return API.put(path, body); },
+  async del(path) { return API.del(path); },
+};
+
+function renderAdmin(hash) {
+  if (!store.user) { toast("请先登录", "err"); location.hash = "#/auth"; return; }
+  if (!store.user.is_admin) { toast("无管理员权限", "err"); location.hash = "#/"; return; }
+
+  const section = hash.replace(/^\/admin\/?/, "") || "dashboard";
+  const sections = [
+    { id: "dashboard", label: "📊 仪表盘" },
+    { id: "users", label: "👤 用户管理" },
+    { id: "soups", label: "🍲 汤管理" },
+    { id: "rooms", label: "🎮 房间管理" },
+    { id: "settings", label: "⚙️ 系统设置" },
+    { id: "logs", label: "📋 操作日志" },
+    { id: "system", label: "🖥️ 系统信息" },
+  ];
+
+  $("#app").innerHTML = `
+    <div class="page">
+      ${headerHtml("admin")}
+      <div class="admin-layout container">
+        <aside class="admin-sidebar">
+          ${sections.map(s => `<a href="#/admin/${s.id}" class="admin-nav-item ${section === s.id ? "active" : ""}">${s.label}</a>`).join("")}
+        </aside>
+        <main class="admin-main" id="adminContent">
+          <div class="admin-loading"><div class="spinner"></div></div>
+        </main>
+      </div>
+      <div id="modalRoot"></div>
+    </div>
+  `;
+
+  if (section === "dashboard") adminDashboard();
+  else if (section === "users") adminUsers();
+  else if (section === "soups") adminSoups();
+  else if (section === "rooms") adminRooms();
+  else if (section === "settings") adminSettings();
+  else if (section === "logs") adminLogs();
+  else if (section === "system") adminSystem();
+  else adminDashboard();
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / 1048576).toFixed(2) + " MB";
+}
+
+// ---- 仪表盘 ----
+async function adminDashboard() {
+  const { ok, data } = await AdminAPI.get("/api/admin/stats");
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">加载失败</div>`; return; }
+
+  const cards = [
+    { label: "用户总数", value: data.users_total, sub: `今日 +${data.new_users_today}`, icon: "👤" },
+    { label: "汤总数", value: data.soups_total, sub: "收录", icon: "🍲" },
+    { label: "房间总数", value: data.rooms_total, sub: `进行中 ${data.rooms_playing} / 已结束 ${data.rooms_ended}`, icon: "🎮" },
+    { label: "消息总数", value: data.messages_total, sub: `今日 +${data.messages_today}`, icon: "💬" },
+    { label: "管理员", value: data.users_admin, sub: "人", icon: "🔑" },
+    { label: "封禁用户", value: data.users_banned, sub: "人", icon: "🚫" },
+    { label: "数据库大小", value: fmtSize(data.db_size || 0), sub: "SQLite", icon: "💾" },
+    { label: "PHP 版本", value: data.php_version, sub: "", icon: "🐘" },
+  ];
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <h2 class="admin-title">📊 仪表盘</h2>
+      <div class="admin-stat-grid">
+        ${cards.map(c => `
+          <div class="admin-stat-card">
+            <div class="admin-stat-icon">${c.icon}</div>
+            <div class="admin-stat-info">
+              <div class="admin-stat-value">${escapeHtml(String(c.value))}</div>
+              <div class="admin-stat-label">${escapeHtml(c.label)}</div>
+              ${c.sub ? `<div class="admin-stat-sub">${escapeHtml(c.sub)}</div>` : ""}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">最近注册用户</h3>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>用户名</th><th>邮箱</th><th>管理员</th><th>注册时间</th></tr></thead>
+        <tbody>
+          ${(data.recent_users || []).map(u => `
+            <tr>
+              <td>${u.id}</td>
+              <td>${escapeHtml(u.username)}${u.is_banned ? ' <span class="tag tag-danger">封禁</span>' : ''}</td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${u.is_admin ? '<span class="tag tag-success">管理员</span>' : '-'}</td>
+              <td>${escapeHtml(u.created_at)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">最近创建的房间</h3>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>房间号</th><th>房主</th><th>状态</th><th>创建时间</th></tr></thead>
+        <tbody>
+          ${(data.recent_rooms || []).map(r => `
+            <tr>
+              <td>${r.id}</td>
+              <td><a href="#/room/${escapeHtml(r.code)}">${escapeHtml(r.code)}</a></td>
+              <td>${escapeHtml(r.host_name || '-')}</td>
+              <td>${r.status === 'playing' ? '<span class="tag tag-success">进行中</span>' : '<span class="tag tag-muted">已结束</span>'}</td>
+              <td>${escapeHtml(r.created_at)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ---- 用户管理 ----
+async function adminUsers(page = 1) {
+  const q = $("#adminSearch")?.value || "";
+  const { ok, data } = await AdminAPI.get(`/api/admin/users?page=${page}&q=${encodeURIComponent(q)}`);
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">${escapeHtml(data.error || "加载失败")}</div>`; return; }
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <div class="admin-toolbar">
+        <h2 class="admin-title">👤 用户管理</h2>
+        <div class="admin-toolbar-right">
+          <input class="input admin-search" id="adminSearch" placeholder="搜索用户名/邮箱…" value="${escapeHtml(q)}" onkeydown="if(event.key==='Enter')adminUsers(1)" />
+          <button class="btn btn-primary admin-btn-sm" onclick="adminUsers(1)">搜索</button>
+          <button class="btn btn-secondary admin-btn-sm" onclick="adminUserCreateModal()">+ 创建用户</button>
+        </div>
+      </div>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>用户名</th><th>邮箱</th><th>角色</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead>
+        <tbody>
+          ${data.users.map(u => `
+            <tr>
+              <td>${u.id}</td>
+              <td>${escapeHtml(u.username)}</td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${u.is_admin ? '<span class="tag tag-success">管理员</span>' : '普通'}</td>
+              <td>${u.is_banned ? '<span class="tag tag-danger">封禁</span>' : '<span class="tag tag-success">正常</span>'}</td>
+              <td>${escapeHtml(u.created_at)}</td>
+              <td class="admin-actions">
+                <button class="admin-act-btn" onclick="adminUserToggleAdmin(${u.id}, ${u.is_admin})">${u.is_admin ? '取消管理' : '设为管理'}</button>
+                <button class="admin-act-btn" onclick="adminUserToggleBan(${u.id}, ${u.is_banned})">${u.is_banned ? '解封' : '封禁'}</button>
+                <button class="admin-act-btn" onclick="adminUserResetPwdModal(${u.id}, '${escapeHtml(u.username)}')">重置密码</button>
+                ${u.id !== store.user.id ? `<button class="admin-act-btn danger" onclick="adminUserDelete(${u.id}, '${escapeHtml(u.username)}')">删除</button>` : ''}
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      ${adminPagination(data.page, data.total_pages, "adminUsers")}
+    </div>
+  `;
+  $("#adminSearch")?.addEventListener("input", () => {});
+}
+window.adminUsers = adminUsers;
+
+window.adminUserCreateModal = () => {
+  const root = $("#modalRoot");
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open">
+      <div class="modal-header"><div><h2 class="modal-title">创建用户</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>用户名</label><input class="input" id="cu_username" /></div>
+        <div class="field"><label>邮箱</label><input class="input" id="cu_email" type="email" /></div>
+        <div class="field"><label>密码（至少6位）</label><input class="input" id="cu_password" type="password" /></div>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cu_is_admin" /> 设为管理员</label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeModal(event)">取消</button>
+        <button class="btn btn-primary" onclick="adminUserCreateDo()">创建</button>
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+};
+
+window.adminUserCreateDo = async () => {
+  const username = $("#cu_username").value.trim();
+  const email = $("#cu_email").value.trim();
+  const password = $("#cu_password").value;
+  const is_admin = $("#cu_is_admin").checked;
+  if (!username || !email || password.length < 6) { toast("请填写完整，密码至少6位", "err"); return; }
+  const { ok, data } = await AdminAPI.post("/api/admin/users", { username, email, password, is_admin });
+  if (!ok) { toast(data.error || "创建失败", "err"); return; }
+  toast("用户创建成功", "ok");
+  closeModal();
+  adminUsers(1);
+};
+
+window.adminUserToggleAdmin = async (id, current) => {
+  const { ok, data } = await AdminAPI.put(`/api/admin/users/${id}`, { is_admin: !current });
+  if (!ok) { toast(data.error || "操作失败", "err"); return; }
+  toast("已更新", "ok");
+  adminUsers();
+};
+
+window.adminUserToggleBan = async (id, current) => {
+  if (!current) {
+    const reason = prompt("封禁原因（可留空）：");
+    if (reason === null) return;
+    const { ok, data } = await AdminAPI.put(`/api/admin/users/${id}`, { is_banned: true, banned_reason: reason });
+    if (!ok) { toast(data.error || "操作失败", "err"); return; }
+    toast("已封禁", "ok");
+  } else {
+    const { ok, data } = await AdminAPI.put(`/api/admin/users/${id}`, { is_banned: false });
+    if (!ok) { toast(data.error || "操作失败", "err"); return; }
+    toast("已解封", "ok");
+  }
+  adminUsers();
+};
+
+window.adminUserResetPwdModal = (id, name) => {
+  const root = $("#modalRoot");
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open">
+      <div class="modal-header"><div><h2 class="modal-title">重置密码 — ${escapeHtml(name)}</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>新密码（至少6位）</label><input class="input" id="rp_password" type="password" /></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeModal(event)">取消</button>
+        <button class="btn btn-primary" onclick="adminUserResetPwdDo(${id})">重置</button>
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+};
+
+window.adminUserResetPwdDo = async (id) => {
+  const password = $("#rp_password").value;
+  if (password.length < 6) { toast("密码至少6位", "err"); return; }
+  const { ok, data } = await AdminAPI.put(`/api/admin/users/${id}/password`, { password });
+  if (!ok) { toast(data.error || "操作失败", "err"); return; }
+  toast("密码已重置", "ok");
+  closeModal();
+};
+
+window.adminUserDelete = async (id, name) => {
+  if (!confirm(`确认删除用户「${name}」？此操作不可撤销。`)) return;
+  const { ok, data } = await AdminAPI.del(`/api/admin/users/${id}`);
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  toast("已删除", "ok");
+  adminUsers();
+};
+
+// ---- 汤管理 ----
+async function adminSoups(page = 1) {
+  const q = $("#adminSearch")?.value || "";
+  const { ok, data } = await AdminAPI.get(`/api/admin/soups?page=${page}&q=${encodeURIComponent(q)}`);
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">${escapeHtml(data.error || "加载失败")}</div>`; return; }
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <div class="admin-toolbar">
+        <h2 class="admin-title">🍲 汤管理</h2>
+        <div class="admin-toolbar-right">
+          <input class="input admin-search" id="adminSearch" placeholder="搜索标题/系列/文件名…" value="${escapeHtml(q)}" onkeydown="if(event.key==='Enter')adminSoups(1)" />
+          <button class="btn btn-primary admin-btn-sm" onclick="adminSoups(1)">搜索</button>
+          <button class="btn btn-secondary admin-btn-sm" onclick="adminSoupEditModal()">+ 新建汤</button>
+          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsImport()">📁 批量导入</button>
+        </div>
+      </div>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>标题</th><th>系列</th><th>集</th><th>文件名</th><th>操作</th></tr></thead>
+        <tbody>
+          ${data.soups.map(s => `
+            <tr>
+              <td>${s.id}</td>
+              <td>${escapeHtml(s.title)}</td>
+              <td>${escapeHtml(s.season || '-')}</td>
+              <td>${escapeHtml(s.episode || '-')}</td>
+              <td>${escapeHtml(s.filename)}</td>
+              <td class="admin-actions">
+                <button class="admin-act-btn" onclick="adminSoupEditModal(${s.id})">编辑</button>
+                <button class="admin-act-btn danger" onclick="adminSoupDelete(${s.id}, '${escapeHtml(s.title)}')">删除</button>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      ${adminPagination(data.page, data.total_pages, "adminSoups")}
+    </div>
+  `;
+}
+window.adminSoups = adminSoups;
+
+window.adminSoupEditModal = async (id) => {
+  let soup = { title: '', season: '', episode: '', surface: '', base: '', filename: '' };
+  if (id) {
+    const { ok, data } = await AdminAPI.get(`/api/admin/soups`);
+    if (ok) soup = data.soups.find(s => s.id === id) || soup;
+  }
+  const root = $("#modalRoot");
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open">
+      <div class="modal-header"><div><h2 class="modal-title">${id ? '编辑汤' : '新建汤'}</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>标题</label><input class="input" id="es_title" value="${escapeHtml(soup.title)}" /></div>
+        <div class="admin-row">
+          <div class="field"><label>系列/季</label><input class="input" id="es_season" value="${escapeHtml(soup.season || '')}" /></div>
+          <div class="field"><label>集</label><input class="input" id="es_episode" value="${escapeHtml(soup.episode || '')}" /></div>
+        </div>
+        <div class="field"><label>文件名（不含.md，留空自动生成）</label><input class="input" id="es_filename" value="${escapeHtml(soup.filename || '')}" /></div>
+        <div class="field"><label>汤面</label><textarea class="input" id="es_surface" rows="4">${escapeHtml(soup.surface || '')}</textarea></div>
+        <div class="field"><label>汤底</label><textarea class="input" id="es_base" rows="4">${escapeHtml(soup.base || '')}</textarea></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeModal(event)">取消</button>
+        <button class="btn btn-primary" onclick="adminSoupSave(${id || 0})">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+};
+
+window.adminSoupSave = async (id) => {
+  const body = {
+    title: $("#es_title").value.trim(),
+    season: $("#es_season").value.trim(),
+    episode: $("#es_episode").value.trim(),
+    filename: $("#es_filename").value.trim(),
+    surface: $("#es_surface").value,
+    base: $("#es_base").value,
+  };
+  if (!body.title || !body.surface || !body.base) { toast("标题、汤面、汤底不能为空", "err"); return; }
+  const { ok, data } = id
+    ? await AdminAPI.put(`/api/admin/soups/${id}`, body)
+    : await AdminAPI.post("/api/admin/soups", body);
+  if (!ok) { toast(data.error || "保存失败", "err"); return; }
+  toast("已保存", "ok");
+  closeModal();
+  adminSoups();
+};
+
+window.adminSoupDelete = async (id, title) => {
+  if (!confirm(`确认删除「${title}」？`)) return;
+  const { ok, data } = await AdminAPI.del(`/api/admin/soups/${id}`);
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  toast("已删除", "ok");
+  adminSoups();
+};
+
+window.adminSoupsImport = async () => {
+  if (!confirm("从汤源目录批量导入 MD 文件？已存在的会跳过。")) return;
+  const { ok, data } = await AdminAPI.post("/api/admin/soups/import", {});
+  if (!ok) { toast(data.error || "导入失败", "err"); return; }
+  toast(data.msg || "导入完成", "ok");
+  adminSoups();
+};
+
+// ---- 房间管理 ----
+async function adminRooms(page = 1) {
+  const q = $("#adminSearch")?.value || "";
+  const status = $("#adminStatusFilter")?.value || "";
+  const { ok, data } = await AdminAPI.get(`/api/admin/rooms?page=${page}&q=${encodeURIComponent(q)}&status=${encodeURIComponent(status)}`);
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">${escapeHtml(data.error || "加载失败")}</div>`; return; }
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <div class="admin-toolbar">
+        <h2 class="admin-title">🎮 房间管理</h2>
+        <div class="admin-toolbar-right">
+          <input class="input admin-search" id="adminSearch" placeholder="搜索房间号/房主…" value="${escapeHtml(q)}" onkeydown="if(event.key==='Enter')adminRooms(1)" />
+          <select class="input admin-select" id="adminStatusFilter" onchange="adminRooms(1)">
+            <option value="">全部状态</option>
+            <option value="playing" ${status === 'playing' ? 'selected' : ''}>进行中</option>
+            <option value="ended" ${status === 'ended' ? 'selected' : ''}>已结束</option>
+          </select>
+          <button class="btn btn-primary admin-btn-sm" onclick="adminRooms(1)">搜索</button>
+        </div>
+      </div>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>房间号</th><th>房主</th><th>汤</th><th>状态</th><th>AI</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody>
+          ${data.rooms.map(r => `
+            <tr>
+              <td>${r.id}</td>
+              <td><a href="#/room/${escapeHtml(r.code)}">${escapeHtml(r.code)}</a></td>
+              <td>${escapeHtml(r.host_name || '-')}</td>
+              <td>${escapeHtml(r.soup_title || '-')}</td>
+              <td>${r.status === 'playing' ? '<span class="tag tag-success">进行中</span>' : '<span class="tag tag-muted">已结束</span>'}</td>
+              <td>${r.ai_enabled ? '✅' : '❌'}</td>
+              <td>${escapeHtml(r.created_at)}</td>
+              <td class="admin-actions">
+                <button class="admin-act-btn" onclick="adminRoomToggleStatus(${r.id}, '${r.status}')">${r.status === 'playing' ? '结束' : '恢复'}</button>
+                <button class="admin-act-btn" onclick="adminRoomMessages(${r.id}, '${escapeHtml(r.code)}')">消息</button>
+                <button class="admin-act-btn danger" onclick="adminRoomDelete(${r.id}, '${escapeHtml(r.code)}')">删除</button>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      ${adminPagination(data.page, data.total_pages, "adminRooms")}
+    </div>
+  `;
+}
+window.adminRooms = adminRooms;
+
+window.adminRoomToggleStatus = async (id, status) => {
+  const newStatus = status === 'playing' ? 'ended' : 'playing';
+  const { ok, data } = await AdminAPI.put(`/api/admin/rooms/${id}/status`, { status: newStatus });
+  if (!ok) { toast(data.error || "操作失败", "err"); return; }
+  toast("已更新", "ok");
+  adminRooms();
+};
+
+window.adminRoomDelete = async (id, code) => {
+  if (!confirm(`确认删除房间「${code}」？所有消息也会被删除。`)) return;
+  const { ok, data } = await AdminAPI.del(`/api/admin/rooms/${id}`);
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  toast("已删除", "ok");
+  adminRooms();
+};
+
+window.adminRoomMessages = async (roomId, code) => {
+  const { ok, data } = await AdminAPI.get(`/api/admin/rooms/${roomId}/messages`);
+  if (!ok) { toast("加载失败", "err"); return; }
+  const root = $("#modalRoot");
+  const msgs = data.messages || [];
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open">
+      <div class="modal-header"><div><h2 class="modal-title">房间 ${escapeHtml(code)} 消息</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-body">
+        ${msgs.length === 0 ? '<p class="admin-empty">暂无消息</p>' : `
+          <table class="admin-table">
+            <thead><tr><th>ID</th><th>用户</th><th>类型</th><th>内容</th><th>时间</th><th>操作</th></tr></thead>
+            <tbody>
+              ${msgs.map(m => `
+                <tr>
+                  <td>${m.id}</td>
+                  <td>${escapeHtml(m.username || '系统')}</td>
+                  <td>${escapeHtml(m.msg_type)}</td>
+                  <td class="admin-msg-content">${escapeHtml(m.content)}</td>
+                  <td>${escapeHtml(m.created_at)}</td>
+                  <td><button class="admin-act-btn danger" onclick="adminMsgDelete(${m.id})">删除</button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `}
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+};
+
+window.adminMsgDelete = async (id) => {
+  const { ok, data } = await AdminAPI.del(`/api/admin/messages/${id}`);
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  toast("已删除", "ok");
+  closeModal();
+};
+
+// ---- 系统设置 ----
+async function adminSettings() {
+  const { ok, data } = await AdminAPI.get("/api/admin/settings");
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">加载失败</div>`; return; }
+
+  const s = data.settings || {};
+  const config = data.config || {};
+  c.innerHTML = `
+    <div class="admin-section">
+      <h2 class="admin-title">⚙️ 系统设置</h2>
+      <div class="admin-form">
+        <div class="admin-form-row">
+          <label>
+            <input type="checkbox" id="set_allow_submit" ${s.allow_submit === '1' || config.ALLOW_SUBMIT ? 'checked' : ''} />
+            允许用户投稿汤（投稿功能）
+          </label>
+        </div>
+        <div class="admin-form-row">
+          <label>房间消息保留条数（0=全部）</label>
+          <input class="input" type="number" id="set_room_msg_limit" value="${s.room_msg_limit || config.ROOM_MSG_LIMIT || 200}" />
+        </div>
+        <button class="btn btn-primary" onclick="adminSettingsSave()">保存设置</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">当前配置（只读）</h3>
+      <table class="admin-table">
+        <thead><tr><th>配置项</th><th>值</th></tr></thead>
+        <tbody>
+          ${Object.entries(config).map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">数据备份</h3>
+      <p class="admin-hint">点击下载当前数据库完整备份（SQLite 文件）。</p>
+      <a class="btn btn-secondary" href="/api/admin/backup" download>💾 下载数据库备份</a>
+    </div>
+  `;
+}
+
+window.adminSettingsSave = async () => {
+  const body = {
+    allow_submit: $("#set_allow_submit").checked,
+    room_msg_limit: parseInt($("#set_room_msg_limit").value) || 0,
+  };
+  const { ok, data } = await AdminAPI.put("/api/admin/settings", body);
+  if (!ok) { toast(data.error || "保存失败", "err"); return; }
+  toast("设置已保存", "ok");
+};
+
+// ---- 操作日志 ----
+async function adminLogs(page = 1) {
+  const { ok, data } = await AdminAPI.get(`/api/admin/logs?page=${page}`);
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">加载失败</div>`; return; }
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <h2 class="admin-title">📋 操作日志</h2>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>操作人</th><th>动作</th><th>目标</th><th>详情</th><th>IP</th><th>时间</th></tr></thead>
+        <tbody>
+          ${data.logs.map(l => `
+            <tr>
+              <td>${l.id}</td>
+              <td>${escapeHtml(l.admin_name || '-')}</td>
+              <td><span class="tag tag-info">${escapeHtml(l.action)}</span></td>
+              <td>${escapeHtml(l.target || '-')}</td>
+              <td>${escapeHtml(l.detail || '-')}</td>
+              <td>${escapeHtml(l.ip || '-')}</td>
+              <td>${escapeHtml(l.created_at)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      ${adminPagination(data.page, data.total_pages, "adminLogs")}
+    </div>
+  `;
+}
+window.adminLogs = adminLogs;
+
+// ---- 系统信息 ----
+async function adminSystem() {
+  const { ok, data } = await AdminAPI.get("/api/admin/system");
+  const c = $("#adminContent");
+  if (!ok) { c.innerHTML = `<div class="admin-error">加载失败</div>`; return; }
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <h2 class="admin-title">🖥️ 系统信息</h2>
+      <div class="admin-stat-grid">
+        <div class="admin-stat-card"><div class="admin-stat-icon">🐘</div><div><div class="admin-stat-value">${escapeHtml(data.php_version)}</div><div class="admin-stat-label">PHP 版本</div></div></div>
+        <div class="admin-stat-card"><div class="admin-stat-icon">💾</div><div><div class="admin-stat-value">${fmtSize(data.db_size || 0)}</div><div class="admin-stat-label">数据库大小</div></div></div>
+        <div class="admin-stat-card"><div class="admin-stat-icon">📂</div><div><div class="admin-stat-value">${data.disk_free ? fmtSize(data.disk_free) : '-'}</div><div class="admin-stat-label">磁盘剩余</div></div></div>
+        <div class="admin-stat-card"><div class="admin-stat-icon">🕐</div><div><div class="admin-stat-value" style="font-size:1rem">${escapeHtml(data.server_time)}</div><div class="admin-stat-label">服务器时间</div></div></div>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">数据表行数</h3>
+      <table class="admin-table">
+        <thead><tr><th>表名</th><th>行数</th></tr></thead>
+        <tbody>
+          ${Object.entries(data.table_sizes || {}).map(([t, n]) => `<tr><td>${escapeHtml(t)}</td><td>${n}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">PHP 扩展</h3>
+      <table class="admin-table">
+        <thead><tr><th>扩展</th><th>状态</th></tr></thead>
+        <tbody>
+          ${Object.entries(data.extensions || {}).map(([e, v]) => `<tr><td>${escapeHtml(e)}</td><td>${v ? '✅ 已加载' : '❌ 未加载'}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">PHP 配置</h3>
+      <table class="admin-table">
+        <thead><tr><th>配置项</th><th>值</th></tr></thead>
+        <tbody>
+          <tr><td>SAPI</td><td>${escapeHtml(data.php_sapi || '-')}</td></tr>
+          <tr><td>操作系统</td><td>${escapeHtml(data.php_os || '-')}</td></tr>
+          <tr><td>时区</td><td>${escapeHtml(data.timezone || '-')}</td></tr>
+          <tr><td>最大上传</td><td>${escapeHtml(data.max_upload || '-')}</td></tr>
+          <tr><td>最大 POST</td><td>${escapeHtml(data.max_post || '-')}</td></tr>
+          <tr><td>内存限制</td><td>${escapeHtml(data.memory_limit || '-')}</td></tr>
+          <tr><td>数据库路径</td><td>${escapeHtml(data.db_path || '-')}</td></tr>
+          <tr><td>汤源目录</td><td>${escapeHtml(data.soups_dir || '-')} (${data.soups_dir_exists ? '存在' : '不存在'})</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ---- 分页组件 ----
+function adminPagination(page, totalPages, fnName) {
+  if (totalPages <= 1) return '';
+  let btns = [];
+  if (page > 1) btns.push(`<button class="admin-page-btn" onclick="${fnName}(${page - 1})">上一页</button>`);
+  const start = Math.max(1, page - 2);
+  const end = Math.min(totalPages, page + 2);
+  for (let i = start; i <= end; i++) {
+    btns.push(`<button class="admin-page-btn ${i === page ? 'active' : ''}" onclick="${fnName}(${i})">${i}</button>`);
+  }
+  if (page < totalPages) btns.push(`<button class="admin-page-btn" onclick="${fnName}(${page + 1})">下一页</button>`);
+  return `<div class="admin-pagination">${btns.join('')}</div>`;
+}
 
 // ---------- 初始化 ----------
 async function boot() {

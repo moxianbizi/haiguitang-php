@@ -35,7 +35,7 @@ function auth_login() {
         json_error('账号或密码错误', 401);
     }
     $_SESSION['user_id'] = (int)$u['id'];
-    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email']]]);
+    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']]]);
 }
 
 function auth_logout() {
@@ -51,5 +51,5 @@ function auth_me() {
         echo json_encode(['user' => null], JSON_UNESCAPED_UNICODE);
         exit;
     }
-    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email']]]);
+    json_ok(['user' => ['id' => (int)$u['id'], 'username' => $u['username'], 'email' => $u['email'], 'is_admin' => (int)$u['is_admin']]]);
 }

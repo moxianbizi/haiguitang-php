@@ -23,7 +23,7 @@ function current_user() {
     $uid = $_SESSION['user_id'] ?? null;
     if (!$uid) return null;
     $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT id, username, email FROM users WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT id, username, email, is_admin, is_banned, banned_reason FROM users WHERE id = ?');
     $stmt->execute([$uid]);
     $u = $stmt->fetch();
     return $u ?: null;
@@ -32,7 +32,28 @@ function current_user() {
 function require_login() {
     $u = current_user();
     if (!$u) json_error('请先登录', 401);
+    if ((int)$u['is_banned'] === 1) json_error('账号已被封禁：' . ($u['banned_reason'] ?: '无'), 403);
     return $u;
+}
+
+function require_admin() {
+    $u = require_login();
+    if ((int)$u['is_admin'] !== 1) json_error('需要管理员权限', 403);
+    return $u;
+}
+
+function log_admin_action(string $action, string $target = '', string $detail = '') {
+    $u = current_user();
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('INSERT INTO admin_logs (admin_id, admin_name, action, target, detail, ip) VALUES (?, ?, ?, ?, ?, ?)');
+    $stmt->execute([
+        $u ? (int)$u['id'] : null,
+        $u ? $u['username'] : '',
+        $action,
+        $target,
+        $detail,
+        $_SERVER['REMOTE_ADDR'] ?? '',
+    ]);
 }
 
 /** 密码哈希（使用 PHP 内置 password_hash） */

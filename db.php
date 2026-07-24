@@ -46,7 +46,10 @@ class DB {
                 username TEXT NOT NULL UNIQUE,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at TEXT DEFAULT (datetime('now')),
+                is_admin INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0,
+                banned_reason TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -92,7 +95,40 @@ class DB {
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
             CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, id);
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
+                admin_name TEXT,
+                action TEXT NOT NULL,
+                target TEXT,
+                detail TEXT,
+                ip TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created_at);
         ");
+
+        // 迁移：为旧数据库补列
+        $cols = $pdo->query('PRAGMA table_info(users)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('is_admin', $cols)) $pdo->exec('ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0');
+        if (!in_array('is_banned', $cols)) $pdo->exec('ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0');
+        if (!in_array('banned_reason', $cols)) $pdo->exec('ALTER TABLE users ADD COLUMN banned_reason TEXT');
+
+        // 第一个注册的用户自动设为管理员（如果还没有管理员）
+        $adminCount = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE is_admin = 1')->fetchColumn();
+        if ($adminCount === 0) {
+            $firstUser = $pdo->query('SELECT id FROM users ORDER BY id LIMIT 1')->fetch();
+            if ($firstUser) {
+                $pdo->exec('UPDATE users SET is_admin = 1 WHERE id = ' . (int)$firstUser['id']);
+            }
+        }
     }
 
     /** 导入 soups 目录的 MD 文件（仅当表为空时） */
