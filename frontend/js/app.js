@@ -526,9 +526,10 @@ function renderAuth() {
 let _authMode = "login";
 window.switchAuthTab = (mode) => {
   _authMode = mode;
-  $("#tabLogin").classList.toggle("active", mode === "login");
-  $("#tabRegister").classList.toggle("active", mode === "register");
+  const tabLogin = $("#tabLogin");
+  if (tabLogin) tabLogin.classList.toggle("active", mode === "login");
   const f = $("#authForm");
+  if (!f) return;
   if (mode === "login") {
     f.innerHTML = `
       <div id="formMsg"></div>
@@ -541,31 +542,6 @@ window.switchAuthTab = (mode) => {
         <input class="input" id="loginPassword" type="password" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')doLogin()" />
       </div>
       <button class="btn btn-primary" style="width:100%" onclick="doLogin()">登录</button>
-    `;
-  } else {
-    f.innerHTML = `
-      <div id="formMsg"></div>
-      <div class="field">
-        <label>用户名</label>
-        <input class="input" id="regUsername" placeholder="至少 2 个字符" />
-      </div>
-      <div class="field">
-        <label>邮箱</label>
-        <input class="input" id="regEmail" type="email" placeholder="用于接收验证码" />
-      </div>
-      <div class="field">
-        <label>验证码</label>
-        <div class="input-row">
-          <input class="input" id="regCode" placeholder="6 位验证码" />
-          <button class="btn-code" id="sendCodeBtn" onclick="doSendCode()">获取验证码</button>
-        </div>
-      </div>
-      <div class="field">
-        <label>密码</label>
-        <input class="input" id="regPassword" type="password" placeholder="至少 6 位" onkeydown="if(event.key==='Enter')doRegister()" />
-      </div>
-      <button class="btn btn-primary" style="width:100%" onclick="doRegister()">注册</button>
-      <p class="form-foot">已有账号？<a href="#" onclick="switchAuthTab('login');return false;">去登录</a></p>
     `;
   }
 };
@@ -584,36 +560,6 @@ window.doLogin = async () => {
   if (!ok) { setFormMsg(data.error || "登录失败"); return; }
   store.user = data.user;
   toast("登录成功", "ok");
-  location.hash = "#/";
-};
-
-window.doSendCode = async () => {
-  const email = $("#regEmail").value.trim().toLowerCase();
-  if (!email || !email.includes("@")) { setFormMsg("邮箱格式不正确"); return; }
-  const btn = $("#sendCodeBtn");
-  btn.disabled = true;
-  const { ok, data } = await API.post("/api/auth/send-code", { email });
-  if (!ok) { setFormMsg(data.error || "发送失败"); btn.disabled = false; return; }
-  setFormMsg(data.msg || "验证码已发送（若 SMTP 未配置，会在错误信息里返回）", "ok");
-  let n = 60;
-  btn.textContent = `${n}s`;
-  const t = setInterval(() => {
-    n--;
-    btn.textContent = `${n}s`;
-    if (n <= 0) { clearInterval(t); btn.disabled = false; btn.textContent = "获取验证码"; }
-  }, 1000);
-};
-
-window.doRegister = async () => {
-  const username = $("#regUsername").value.trim();
-  const email = $("#regEmail").value.trim().toLowerCase();
-  const code = $("#regCode").value.trim();
-  const password = $("#regPassword").value;
-  if (!username || !email || !code || !password) { setFormMsg("请填写完整"); return; }
-  const { ok, data } = await API.post("/api/auth/register", { username, email, code, password });
-  if (!ok) { setFormMsg(data.error || "注册失败"); return; }
-  store.user = data.user;
-  toast("注册成功", "ok");
   location.hash = "#/";
 };
 
@@ -758,8 +704,9 @@ async function renderRoom(code) {
           </div>
           <div class="chat-body" id="chatBody"></div>
           <div class="chat-input">
-            <input id="chatInput" placeholder="发言或向 AI 提问…" onkeydown="if(event.key==='Enter')sendChat()" />
-            <button onclick="sendChat()">发送</button>
+            <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendChat()" />
+            <button class="btn btn-secondary" style="min-width:auto;flex:0 0 auto;padding:0 14px" onclick="sendChat()" title="发送">💬</button>
+            ${room.ai_enabled ? `<button class="btn btn-primary" style="min-width:auto;flex:0 0 auto;padding:0 14px" onclick="sendAiQuestion()" title="向AI提问">🤖</button>` : ""}
           </div>
         </div>
         <div class="room-side">
@@ -846,7 +793,7 @@ async function refreshRoomSoup(code) {
     : `<div class="no-soup">尚未选汤</div>`;
 }
 
-// 聊天/AI 提问统一通过 REST 发送
+// 聊天发送
 window.sendChat = async () => {
   const input = $("#chatInput");
   if (!input) return;
@@ -854,28 +801,27 @@ window.sendChat = async () => {
   if (!content) return;
   const code = store.currentRoomCode;
   if (!code) { toast("未在房间内", "err"); return; }
-
-  const isQuestion = /[?？]$/.test(content);
   input.value = "";
+  const { ok, data } = await API.post(`/api/rooms/${code}/messages`, { content });
+  if (!ok) toast(data.error || "发送失败", "err");
+};
 
-  if (isQuestion && KeyMgr.has()) {
-    // AI 提问
-    const { ok, data } = await API.post(`/api/rooms/${code}/ai-question`, {
-      content,
-      api_key: KeyMgr.get(),
-    });
-    if (!ok) {
-      toast(data.error || "提问失败", "err");
-      return;
-    }
-    if (data.error) {
-      toast(data.error, "err");
-    }
-    // 问题/答案会通过轮询回来
-  } else {
-    const { ok, data } = await API.post(`/api/rooms/${code}/messages`, { content });
-    if (!ok) toast(data.error || "发送失败", "err");
-  }
+// 房间内向 AI 提问
+window.sendAiQuestion = async () => {
+  const input = $("#chatInput");
+  if (!input) return;
+  const content = input.value.trim();
+  if (!content) return;
+  const code = store.currentRoomCode;
+  if (!code) { toast("未在房间内", "err"); return; }
+  if (!KeyMgr.has()) { toast("请先在右上角 ⚙ 配置 DeepSeek Key", "err"); return; }
+  input.value = "";
+  const { ok, data } = await API.post(`/api/rooms/${code}/ai-question`, {
+    content,
+    api_key: KeyMgr.get(),
+  });
+  if (!ok) { toast(data.error || "提问失败", "err"); return; }
+  if (data.error) toast(data.error, "err");
 };
 
 window.pickSoupForRoomUpdate = (code) => {
@@ -999,14 +945,17 @@ window.openSettings = openSettings;
 function closeSettings(e) {
   if (e) e.stopPropagation();
   const root = $("#modalRoot");
-  if (root) {
-    // 仅移除设置弹窗，保留可能的其他弹窗？这里简化为清空
-    root.innerHTML = "";
-  }
+  if (root) root.innerHTML = "";
   document.body.style.overflow = "";
-  // 刷新 header 的 Key 状态指示
-  const cur = location.hash.replace(/^#/, "") || "/";
-  route();
+  // 局部刷新 header 的 Key 状态，不重渲染整页
+  const btn = document.querySelector(".header .btn-icon");
+  if (btn) {
+    btn.classList.toggle("has-key", KeyMgr.has());
+  }
+  // 如果在首页，刷新统计栏
+  if (location.hash.replace(/^#/, "") === "/" || location.hash === "") {
+    renderStats();
+  }
 }
 window.closeSettings = closeSettings;
 

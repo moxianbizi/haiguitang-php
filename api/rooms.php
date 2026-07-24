@@ -72,16 +72,12 @@ function rooms_get(string $code, int $status = 200) {
     }
 
     $limit = Config::$ROOM_MSG_LIMIT;
-    $sql = 'SELECT id, user_id, username, msg_type, content, strftime("%H:%M:%S", created_at) AS created_at FROM messages WHERE room_id = ? ORDER BY id';
-    $params = [$r['id']];
     if ($limit > 0) {
-        // 取最近 N 条
-        $sql = "SELECT * FROM ({$sql}) ORDER BY id DESC LIMIT ?";
-        // 上面用子查询，简化为直接 limit 最近
         $sql = 'SELECT id, user_id, username, msg_type, content, strftime("%H:%M:%S", created_at) AS created_at FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT ?';
-        $params[] = $limit;
+        $params = [$r['id'], $limit];
     } else {
-        $sql .= ' ASC';
+        $sql = 'SELECT id, user_id, username, msg_type, content, strftime("%H:%M:%S", created_at) AS created_at FROM messages WHERE room_id = ? ORDER BY id ASC';
+        $params = [$r['id']];
     }
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -141,6 +137,7 @@ function rooms_send_message(string $code) {
     $stmt->execute([$code]);
     $r = $stmt->fetch();
     if (!$r) json_error('房间不存在', 404);
+    if ($r['status'] !== 'playing') json_error('房间已结束');
 
     $msg = save_message($r['id'], $user, 'chat', $content);
     json_ok(['message' => message_to_dict($msg)]);
@@ -158,6 +155,7 @@ function rooms_ai_question(string $code) {
     $stmt->execute([$code]);
     $r = $stmt->fetch();
     if (!$r) json_error('房间不存在', 404);
+    if ($r['status'] !== 'playing') json_error('房间已结束');
     if (!$r['soup_id']) json_error('房间里还没有选汤');
     if (!$r['ai_enabled']) json_error('AI 未启用');
 

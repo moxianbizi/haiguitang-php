@@ -71,7 +71,8 @@ function soups_download(int $id) {
     $file = Config::$SOUPS_DIR . '/' . $s['filename'];
     if (is_file($file)) {
         header('Content-Type: text/markdown; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $s['filename'] . '"');
+        $safeName = str_replace('"', '', $s['filename']);
+        header('Content-Disposition: attachment; filename="' . $safeName . '"');
         readfile($file);
         exit;
     }
@@ -82,7 +83,8 @@ function soups_download(int $id) {
     if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
     $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
     header('Content-Type: text/markdown; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $s['filename'] . '"');
+    $safeName = str_replace('"', '', $s['filename']);
+    header('Content-Disposition: attachment; filename="' . $safeName . '"');
     echo $md;
     exit;
 }
@@ -136,6 +138,7 @@ function soups_create() {
 
 function soups_update(int $id) {
     $user = require_login();
+    if (!Config::$ALLOW_SUBMIT) json_error('暂未开放编辑');
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT * FROM soups WHERE id = ?');
     $stmt->execute([$id]);
@@ -163,6 +166,7 @@ function soups_update(int $id) {
 
 function soups_delete(int $id) {
     $user = require_login();
+    if (!Config::$ALLOW_SUBMIT) json_error('暂未开放删除');
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT filename FROM soups WHERE id = ?');
     $stmt->execute([$id]);
