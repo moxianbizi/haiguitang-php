@@ -405,11 +405,11 @@ function renderSoupModal(soup, revealed) {
           </div>
         </div>
 
-        <div class="section-label base">汤底</div>
-        <div class="text-block reveal" id="baseBlock">
-          <div class="${revealed ? "" : "reveal-blur"}">${escapeHtml(soup.base || "（暂无汤底）")}</div>
-          ${!revealed ? `<div class="reveal-cover" onclick="revealBase(event)"><span>👁 点击揭晓汤底</span></div>` : ""}
+        <div class="section-label base">
+          <span>汤底</span>
+          <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
         </div>
+        <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base || "（暂无汤底）")}</div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
@@ -479,8 +479,11 @@ function refreshAiHistory(soupId) {
 function revealBase(e) {
   e.stopPropagation();
   const block = $("#baseBlock");
+  const toggle = $("#revealToggle");
   if (!block) return;
-  block.innerHTML = `<div>${escapeHtml(store.selected?.base || "（暂无汤底）")}</div>`;
+  const collapsed = block.style.display === "none";
+  block.style.display = collapsed ? "block" : "none";
+  if (toggle) toggle.textContent = collapsed ? "▼ 收起汤底" : "▶ 点击展开汤底";
 }
 window.revealBase = revealBase;
 
