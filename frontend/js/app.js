@@ -478,7 +478,9 @@ function refreshAiHistory(soupId) {
 
 function revealBase(e) {
   e.stopPropagation();
-  if (store.selected) renderSoupModal(store.selected, true);
+  const block = $("#baseBlock");
+  if (!block) return;
+  block.innerHTML = `<div>${escapeHtml(store.selected?.base || "（暂无汤底）")}</div>`;
 }
 window.revealBase = revealBase;
 
