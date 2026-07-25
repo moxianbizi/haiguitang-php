@@ -36,12 +36,19 @@ $admin = current_user();
 $isAdmin = $admin && (int)$admin['is_admin'] === 1;
 
 // 支持 token 参数免 session（可选，配置 Config::$TOOL_TOKEN 后可用）
+// 也兼容 Config::$ADMIN_API_TOKEN（让后台 Admin API Token 也能调用运维工具）
 $tokenOk = false;
-if (!empty(Config::$TOOL_TOKEN)) {
+$validTokens = array_filter([Config::$TOOL_TOKEN ?? '', Config::$ADMIN_API_TOKEN ?? '']);
+if (!empty($validTokens)) {
     // 仅接受 POST/HEADER 传 token，禁止 GET（避免泄露到日志/Referer）
-    $token = $_POST['token'] ?? ($_SERVER['HTTP_X_TOOL_TOKEN'] ?? '');
-    if ($token !== '' && hash_equals(Config::$TOOL_TOKEN, $token)) {
-        $tokenOk = true;
+    $token = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? $_SERVER['HTTP_X_TOOL_TOKEN'] ?? $_POST['token'] ?? '';
+    if ($token !== '') {
+        foreach ($validTokens as $valid) {
+            if (hash_equals($valid, $token)) {
+                $tokenOk = true;
+                break;
+            }
+        }
     }
 }
 

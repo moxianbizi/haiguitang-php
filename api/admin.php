@@ -31,6 +31,8 @@ function handle_admin(array $segments) {
     elseif ($action === 'logs' && $method === 'GET') admin_logs();
     elseif ($action === 'backup' && $method === 'GET') admin_backup();
     elseif ($action === 'system' && $method === 'GET') admin_system();
+    elseif ($action === 'git_pull' && $method === 'POST') admin_git_pull();
+    elseif ($action === 'reset_opcache' && $method === 'POST') admin_reset_opcache();
     else json_error('Not Found', 404);
 }
 
@@ -693,4 +695,68 @@ function admin_system() {
         'max_post' => ini_get('post_max_size'),
         'memory_limit' => ini_get('memory_limit'),
     ]);
+}
+
+// ===================== Git 部署 / OPcache =====================
+
+/**
+ * 在项目根目录执行 shell 命令（仅限 admin_git_pull 使用）。
+ * 返回 [output, exitCode]。
+ */
+function admin_run_shell(string $cmd): array {
+    if (!function_exists('shell_exec')) return ['shell_exec 不可用', 1];
+    $wrapped = 'cd ' . escapeshellarg(__DIR__ . '/..') . ' && ' . $cmd . ' 2>&1';
+    $out = @shell_exec($wrapped);
+    return [$out ?: '', $out === null ? 1 : 0];
+}
+
+/** POST /api/admin/git_pull —— 一键拉取最新代码并重置 OPcache */
+function admin_git_pull() {
+    if (!function_exists('shell_exec')) json_error('shell_exec 被禁用，无法执行 git pull');
+
+    $branch = 'master';
+    [$bOut,] = admin_run_shell('git rev-parse --abbrev-ref HEAD');
+    $b = trim(explode("\n", $bOut)[0]);
+    if ($b !== '' && $b !== 'HEAD') $branch = $b;
+
+    [$before,] = admin_run_shell('git rev-parse HEAD');
+    $before = trim($before);
+    [$pullOut, $pullCode] = admin_run_shell('git pull origin ' . escapeshellarg($branch));
+    [$after,] = admin_run_shell('git rev-parse HEAD');
+    $after = trim($after);
+
+    // 重置 OPcache，确保新代码立即生效
+    if (function_exists('opcache_reset')) opcache_reset();
+
+    $output = "分支: $branch\n拉取前: $before\n拉取后: $after\n\n---- git pull 输出 ----\n$pullOut";
+    if ($before === $after) {
+        $output .= "\n\nℹ️ HEAD 未变化（本地已是最新，或 pull 失败）";
+    } else {
+        [$cnt,] = admin_run_shell("git rev-list {$before}..{$after} --count");
+        $cnt = trim($cnt);
+        $output .= "\n\n✅ 已更新到新版本，新增 $cnt 个提交";
+    }
+    if ($pullCode !== 0) {
+        $output .= "\n\n⚠️ git pull 返回非零退出码（$pullCode），可能本地有未提交修改，可尝试 git stash 后再 pull";
+    }
+
+    log_admin_action('git_pull', '', "before=$before after=$after branch=$branch");
+    json_ok([
+        'msg' => $before === $after ? '已是最新版本' : '已更新到新版本',
+        'updated' => $before !== $after,
+        'before' => $before,
+        'after' => $after,
+        'branch' => $branch,
+        'output' => $output,
+    ]);
+}
+
+/** POST /api/admin/reset_opcache —— 重置 OPcache */
+function admin_reset_opcache() {
+    if (function_exists('opcache_reset')) {
+        opcache_reset();
+        log_admin_action('reset_opcache', '', '');
+        json_ok(['msg' => 'OPcache 已重置']);
+    }
+    json_error('OPcache 未启用');
 }
