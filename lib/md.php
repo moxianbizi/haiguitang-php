@@ -10,6 +10,65 @@
  *
  * 图片路径转换：./海龟汤图片/xxx.jpeg → /soups-img/xxx.jpeg
  */
+
+/**
+ * 红字规则自动标记：识别汤面末尾的「（注：2、4、6、8为红字规则，即反话）」说明，
+ * 提取编号，把对应条目用 <em> 包裹（前端 em 渲染为红色规则）。
+ *
+ * 处理流程：
+ * 1. 从汤面尾部匹配「（注：X、X、X为红字规则[，即...]）」格式的说明
+ * 2. 提取红字编号集合（支持中文顿号、逗号分隔，如 "2、4、6、8" 或 "2,4,6,8"）
+ * 3. 把汤面正文按「数字.」或「数字．」或「数字、」切分成条目
+ * 4. 把命中的红字条目用 <em> 包裹，移除尾部的说明括号
+ *
+ * @param string $surface 汤面原文
+ * @return string 处理后的汤面（红字条目已包裹 <em>，说明括号已移除）
+ */
+function apply_red_rule_marker(string $surface): string {
+    if ($surface === '') return $surface;
+
+    // 匹配尾部的红字规则说明：（注：X、X为红字规则[，即...]）或（X、X为红字规则）
+    // 说明可能在末尾，也可能后跟其他文字；用非贪婪匹配到"为红字规则"为止
+    if (!preg_match('/（[^）]*?([\d，、,\s]+)\s*为\s*红字规则[^）]*）/u', $surface, $m)) {
+        return $surface;
+    }
+    $numbersStr = $m[1];
+    // 提取所有数字
+    if (!preg_match_all('/\d+/u', $numbersStr, $nm)) {
+        return $surface;
+    }
+    $redNumbers = array_unique($nm[0]);
+    if (empty($redNumbers)) return $surface;
+
+    // 移除说明括号（连同其后的"即反话"等说明文字）
+    $surface = preg_replace('/（[^）]*?[\d，、,\s]+\s*为\s*红字规则[^）]*）/u', '', $surface);
+
+    // 按条目编号切分：支持「1.」「1．」「1、」三种分隔符
+    // 用正则把每条拆出来：编号 + 内容（到下一个编号或字符串末尾）
+    // 编号后紧跟内容，内容里不含下一个编号
+    $pattern = '/(\d+)[.．、]\s*([^ ]*?)(?=(?:\d+[.．、])|$)/u';
+    if (!preg_match_all($pattern, $surface, $items, PREG_SET_ORDER)) {
+        return $surface;
+    }
+
+    // 重建汤面：遍历条目，命中红字编号的用 <em> 包裹
+    $result = $surface;
+    foreach ($items as $item) {
+        $num = $item[1];
+        $full = $item[0]; // 编号 + 内容
+        if (in_array($num, $redNumbers, true)) {
+            // 用 <em> 包裹整条（含编号），保留原分隔
+            $replacement = "<em>{$full}</em>";
+            // 只替换第一次出现（避免重复条目互相影响）
+            $pos = mb_strpos($result, $full);
+            if ($pos !== false) {
+                $result = mb_substr($result, 0, $pos) . $replacement . mb_substr($result, $pos + mb_strlen($full));
+            }
+        }
+    }
+    return $result;
+}
+
 function parse_md(string $filename, string $content): array {
     // 统一换行
     $content = str_replace(["\r\n", "\r"], "\n", $content);
@@ -180,6 +239,11 @@ function parse_md(string $filename, string $content): array {
         $base       = trim($m[1]);
         $hostManual = trim($m[2]);
     }
+
+    // 红字规则自动标记：识别汤面末尾的「（注：2、4、6、8为红字规则，即反话）」说明，
+    // 提取编号，把对应条目用 <em> 包裹（前端 em 渲染为红色规则）。
+    // 仅处理有明确「X、X为红字规则」编号说明的汤（如 S3E16 白雪公主）。
+    $surface = apply_red_rule_marker($surface);
 
     // 图片路径转换：./海龟汤图片/ → /soups-img/
     // （放在所有兜底之后，确保 surface/base/host_manual/extra 中的图片路径都被转换）
