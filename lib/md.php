@@ -79,14 +79,15 @@ function parse_md(string $filename, string $content): array {
                 $current = $key;
                 // 标记行本身也可能带内容（如「汤面 我吃饱饭就死了」）
                 $rest = preg_replace($pattern, '', $stripped);
-                $rest = ltrim($rest, '：:）)* 　');
+                // 用正则去掉行首的标点/空白（ltrim 按 byte 处理，会破坏以 e3 80 开头的多字节字符如《）
+                $rest = preg_replace('/^[\s：:）)*　]+/u', '', $rest);
                 // 若剥离了 span 标签，且行尾有 </span>，保留 span 结构用于颜色渲染
                 if ($rest !== '' && $stripped !== $trimmed) {
                     // 行首有 span 标签，把 span 重新加上（保持颜色）
                     $rest = preg_replace('/^<span[^>]*>/u', '', $trimmed) ;
                     // 去掉标记部分
                     $rest = preg_replace($pattern, '', $rest, 1);
-                    $rest = ltrim($rest, '：:）)* 　');
+                    $rest = preg_replace('/^[\s：:）)*　]+/u', '', $rest);
                 }
                 if ($rest !== '') $sections[$key][] = $rest;
                 $matched = true;

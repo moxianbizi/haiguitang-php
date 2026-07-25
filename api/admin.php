@@ -1,6 +1,11 @@
 <?php
 /** 管理员后台 API */
 
+// 引入 soups.php：admin 中的汤 CRUD 调用 soups_build_md()，
+// 而 soups.php 只在 /api/soups/* 路由下被 index.php 加载，
+// admin 路由下需自行引入，否则 soups_build_md 未定义导致 500。
+require_once __DIR__ . '/soups.php';
+
 function handle_admin(array $segments) {
     $admin = require_admin();
     $action = $segments[1] ?? '';
