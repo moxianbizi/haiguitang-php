@@ -719,6 +719,9 @@ function admin_run_shell(string $cmd): array {
 function admin_git_pull() {
     if (!function_exists('shell_exec')) json_error('shell_exec 被禁用，无法执行 git pull');
 
+    // force=1 时丢弃本地修改强制拉取（用于服务器有未提交修改导致 pull 失败的场景）
+    $force = !empty($_GET['force']) || !empty($_POST['force']);
+
     $branch = 'master';
     [$bOut,] = admin_run_shell('git rev-parse --abbrev-ref HEAD');
     $b = trim(explode("\n", $bOut)[0]);
@@ -726,14 +729,31 @@ function admin_git_pull() {
 
     [$before,] = admin_run_shell('git rev-parse HEAD');
     $before = trim($before);
+
+    $stashOut = '';
+    if ($force) {
+        // 强制模式：stash 本地修改，pull 后丢弃 stash（用远程版本）
+        [$stashOut,] = admin_run_shell('git stash -u 2>&1');
+    }
+
     [$pullOut, $pullCode] = admin_run_shell('git pull origin ' . escapeshellarg($branch));
+
+    // 强制模式下丢弃 stash（不恢复本地修改，用远程新代码）
+    if ($force) {
+        admin_run_shell('git stash drop 2>/dev/null');
+    }
+
     [$after,] = admin_run_shell('git rev-parse HEAD');
     $after = trim($after);
 
     // 重置 OPcache，确保新代码立即生效
     if (function_exists('opcache_reset')) opcache_reset();
 
-    $output = "分支: $branch\n拉取前: $before\n拉取后: $after\n\n---- git pull 输出 ----\n$pullOut";
+    $output = "分支: $branch\n拉取前: $before\n拉取后: $after\n";
+    if ($force && $stashOut !== '' && stripos($stashOut, 'No local changes') === false && stripos($stashOut, '没有本地修改') === false) {
+        $output .= "\n---- git stash 输出（已丢弃本地修改）----\n$stashOut\n";
+    }
+    $output .= "\n---- git pull 输出 ----\n$pullOut";
     if ($before === $after) {
         $output .= "\n\nℹ️ HEAD 未变化（本地已是最新，或 pull 失败）";
     } else {
@@ -745,13 +765,14 @@ function admin_git_pull() {
         $output .= "\n\n⚠️ git pull 返回非零退出码（$pullCode），可能本地有未提交修改，可尝试 git stash 后再 pull";
     }
 
-    log_admin_action('git_pull', '', "before=$before after=$after branch=$branch");
+    log_admin_action('git_pull', '', "before=$before after=$after branch=$branch force=" . ($force ? 1 : 0));
     json_ok([
         'msg' => $before === $after ? '已是最新版本' : '已更新到新版本',
         'updated' => $before !== $after,
         'before' => $before,
         'after' => $after,
         'branch' => $branch,
+        'force' => $force,
         'output' => $output,
     ]);
 }

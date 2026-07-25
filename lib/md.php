@@ -28,6 +28,8 @@ function parse_md(string $filename, string $content): array {
         }
         // 去掉书名号
         $title = preg_replace('/^《(.+)》$/', '$1', $title);
+        // 去掉首尾的 ** 加粗标记（如 "**S3E42《教室》**" → "S3E42《教室》"）
+        $title = preg_replace('/^\*\*(.+)\*\*$/', '$1', $title);
         break;
     }
 
@@ -112,17 +114,29 @@ function parse_md(string $filename, string $content): array {
     $hostManual = $clean($sections['host_manual']);
     $extra      = $clean($sections['extra']);
 
-    // 图片路径转换：./海龟汤图片/ → /soups-img/
-    $imgConvert = function (string $s): string {
-        if ($s === '') return $s;
-        return str_replace('./海龟汤图片/', '/soups-img/', $s);
-    };
-    $surface    = $imgConvert($surface);
-    $base       = $imgConvert($base);
-    $hostManual = $imgConvert($hostManual);
-    $extra      = $imgConvert($extra);
+    // 兜底0：表格型汤（如 S3E42《教室》整篇就是一个 markdown 表格，
+    // 表头行含"汤面"，数据行含"汤底"）。优先于通用兜底处理，
+    // 避免被通用正则切成残缺片段。
+    if ($surface === '' && $base === '' && $extra !== '' && preg_match('/^\s*\|/m', $extra)) {
+        // 提取"汤面"行：| 汤面XXX | cell | cell |
+        if (preg_match('/^\s*\|[^|\n]*汤面[^|\n]*\|(.+?)\|\s*$/mu', $extra, $ms)) {
+            $surface = trim($ms[1], "| \t\n");
+        }
+        // 提取"汤底"行：| 汤底 | cell | cell |
+        if (preg_match('/^\s*\|[^|\n]*汤底[^|\n]*\|(.+?)\|\s*$/mu', $extra, $mb)) {
+            $base = trim($mb[1], "| \t\n");
+        }
+        // 提取"主持人手册"行（如有）
+        if (preg_match('/^\s*\|[^|\n]*主持人手册[^|\n]*\|(.+?)\|\s*$/mu', $extra, $mh)) {
+            $hostManual = trim($mh[1], "| \t\n");
+        }
+        // 若成功提取出 surface 或 base，清空 extra（避免重复展示整张表）
+        if ($surface !== '' || $base !== '') {
+            $extra = '';
+        }
+    }
 
-    // 兜底1：若标记都没匹配到，回退到老的「汤面...汤底...」正则
+    // 兜底1：若标记都没匹配到（且不是表格型），回退到老的「汤面...汤底...」正则
     if ($surface === '' && $base === '') {
         $body = implode("\n", array_filter($lines, fn($l) => !str_starts_with(trim($l), '#')));
         if (preg_match('/汤面(.+?)汤底(.+)/s', $body, $m)) {
@@ -131,11 +145,17 @@ function parse_md(string $filename, string $content): array {
         }
     }
 
-    // 兜底1.5：surface 为空但 extra 有内容（如 S3E68 "规则（本期无汤面）..."），
+    // 兜底1.5：surface 为空但 base 有内容（如 S3E68 "规则（本期无汤面）..."），
     // 把 extra 当作 surface（规则类汤的"规则"就是汤面）
     if ($surface === '' && $base !== '' && $extra !== '') {
         $surface = $extra;
         $extra = '';
+    }
+
+    // 兜底1.6：「汤面+汤底」合并格式（如 S3E60），split 后内容进了 base 但 surface 为空，
+    // 把 base 复制到 surface（合并格式的汤面本身就是完整故事，汤底即同内容）
+    if ($surface === '' && $base !== '' && $extra === '') {
+        $surface = $base;
     }
 
     // 兜底2：surface 有内容但 base 空，且 extra 中有内容
@@ -154,6 +174,17 @@ function parse_md(string $filename, string $content): array {
         $base       = trim($m[1]);
         $hostManual = trim($m[2]);
     }
+
+    // 图片路径转换：./海龟汤图片/ → /soups-img/
+    // （放在所有兜底之后，确保 surface/base/host_manual/extra 中的图片路径都被转换）
+    $imgConvert = function (string $s): string {
+        if ($s === '') return $s;
+        return str_replace('./海龟汤图片/', '/soups-img/', $s);
+    };
+    $surface    = $imgConvert($surface);
+    $base       = $imgConvert($base);
+    $hostManual = $imgConvert($hostManual);
+    $extra      = $imgConvert($extra);
 
     // season/episode 从文件名推断
     $season = '';
