@@ -13,6 +13,7 @@ function handle_admin(array $segments) {
     elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
     elseif ($action === 'soups' && $segments[2] === 'import' && $method === 'POST') admin_soups_import();
     elseif ($action === 'soups' && $segments[2] === 'reimport' && $method === 'POST') admin_soups_reimport();
+    elseif ($action === 'soups' && $segments[2] === 'broken' && $method === 'GET') admin_soups_broken();
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'PUT') admin_soups_update((int)$segments[2]);
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
     elseif ($action === 'rooms' && $method === 'GET') admin_rooms_list();
@@ -383,6 +384,44 @@ function admin_soups_reimport() {
     if (!empty($result['skipped'])) $msg .= "，跳过 {$result['skipped']} 碗（文件不存在）";
     if (!empty($result['error'])) $msg .= "，错误：{$result['error']}";
     json_ok(['msg' => $msg] + $result);
+}
+
+/**
+ * 坏汤检测：列出汤面/汤底为空、或汤面疑似混入汤底内容（过长）的汤，
+ * 便于管理员快速定位修复。
+ */
+function admin_soups_broken() {
+    $pdo = DB::pdo();
+    $rows = $pdo->query('SELECT id, filename, season, episode, title, surface, base, host_manual, extra FROM soups ORDER BY id')->fetchAll();
+
+    $broken = [];
+    // 汤面正常长度阈值：超过 600 字疑似把汤底内容混进来了
+    $surfaceTooLong = 600;
+    foreach ($rows as $s) {
+        $surfaceLen = mb_strlen(trim((string)$s['surface']));
+        $baseLen = mb_strlen(trim((string)$s['base']));
+        $issues = [];
+        if ($surfaceLen === 0) $issues[] = '汤面为空';
+        if ($baseLen === 0)    $issues[] = '汤底为空';
+        // 仅当汤面非空且明显过长、且汤底也非空时才提示「疑似混入」，
+        // 避免对原本就只有长汤面的汤误报
+        if ($surfaceLen > $surfaceTooLong && $baseLen > 0) {
+            $issues[] = "汤面过长({$surfaceLen}字)，疑似混入汤底";
+        }
+        if ($issues) {
+            $s['issues'] = $issues;
+            $s['surface_len'] = $surfaceLen;
+            $s['base_len'] = $baseLen;
+            $s['host_manual_len'] = mb_strlen(trim((string)$s['host_manual']));
+            $broken[] = $s;
+        }
+    }
+
+    json_ok([
+        'total' => count($rows),
+        'broken_count' => count($broken),
+        'broken' => $broken,
+    ]);
 }
 
 // ===================== 房间管理 =====================

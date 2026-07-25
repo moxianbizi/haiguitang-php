@@ -33,16 +33,34 @@ function parse_md(string $filename, string $content): array {
     // 段落标记识别规则：key => 正则（匹配行首标记）
     // 顺序敏感：先匹配更具体的标记
     // 注意：
-    //   - 「汤面」「汤底」「怪谈解析」等允许后面直接跟内容（如「汤面我吃饱饭就死了」），
+    //   - 「汤面」「汤底」「怪谈解析」「故事梗概」等允许后面直接跟内容（如「汤面我吃饱饭就死了」），
     //     因此不带尾部锚定。
     //   - 「残响」「回音」作为短词，必须用 lookahead (?=[：:（(]|$) 限定尾部，
     //     否则会把「残响碎片」「残响难度」误判为 surface、把「回音（汤底）」外的内容误吞。
+    //   - 「回音（汤底）」允许括号前后有空格，兼容「回音 （汤底）」「回音(汤底)」等写法。
     $markers = [
-        'surface'     => '/^(?:#{0,2}\s*)?(?:汤面规则|残响（汤面）|残响\(汤面\)|汤面|残响(?=[：:（(]|$))/u',
-        'base'        => '/^(?:#{0,2}\s*)?(?:回音（汤底）|回音\(汤底\)|怪谈解析|汤底|回音(?=[：:（(]|$))/u',
+        'surface'     => '/^(?:#{0,2}\s*)?(?:汤面规则|残响\s*[（(]\s*汤面\s*[)）]|汤面|残响(?=[：:（(]|$))/u',
+        'base'        => '/^(?:#{0,2}\s*)?(?:回音\s*[（(]\s*汤底\s*[)）]|怪谈解析|故事梗概|汤底|回音(?=[：:（(]|$))/u',
         'host_manual' => '/^(?:#{0,2}\s*)?(?:主持人手册|主持人须知|玩法说明|残响碎片|幻灵角色视角|残响难度|通关条件|隐藏规则|玩家获胜条件|胜利条件|提问次数)(?:[：:（(]|$)?/u',
-        'extra'       => '/^(?:#{0,2}\s*)?(?:收容物|故事梗概|背景设定|附录|备注)(?:[：:（(]|$)?/u',
+        'extra'       => '/^(?:#{0,2}\s*)?(?:收容物|背景设定|附录|备注)(?:[：:（(]|$)?/u',
     ];
+
+    // 预处理：把「汤面+汤底」「汤面+汤底XXX」这种合并标记拆成两行
+    // 仅当行首匹配时拆分，避免误伤正文中的「汤面+汤底」表述
+    $lines = array_map(function($line) {
+        $t = trim($line);
+        if (preg_match('/^(#{0,2}\s*)汤面\s*[+＋&与和及]\s*汤底(.*)$/u', $t, $m)) {
+            $prefix = isset($m[1]) ? $m[1] : '';
+            $rest = isset($m[2]) ? $m[2] : '';
+            // 拆成：汤面 / 汤底<rest> 两行（rest 通常为空或紧跟内容）
+            return [$prefix . '汤面', $prefix . '汤底' . ltrim($rest)];
+        }
+        return [$line];
+    }, $lines);
+    // 展平嵌套数组
+    $flat = [];
+    foreach ($lines as $arr) foreach ($arr as $l) $flat[] = $l;
+    $lines = $flat;
 
     // 按"行"扫描，根据当前段落归属累积内容
     $sections = ['surface' => [], 'base' => [], 'host_manual' => [], 'extra' => []];
@@ -88,12 +106,26 @@ function parse_md(string $filename, string $content): array {
     $hostManual = $clean($sections['host_manual']);
     $extra      = $clean($sections['extra']);
 
-    // 兜底：若标记都没匹配到，回退到老的「汤面...汤底...」正则
+    // 兜底1：若标记都没匹配到，回退到老的「汤面...汤底...」正则
     if ($surface === '' && $base === '') {
         $body = implode("\n", array_filter($lines, fn($l) => !str_starts_with(trim($l), '#')));
         if (preg_match('/汤面(.+?)汤底(.+)/s', $body, $m)) {
             $surface = trim($m[1]);
             $base    = trim($m[2]);
+        }
+    }
+
+    // 兜底2：surface 有内容但 base 空，且 extra 中有非收容物内容 →
+    // 视为作者省略了「汤底」标记，把 extra 当作 base（收容物仍归 extra）
+    if ($surface !== '' && $base === '' && $extra !== '') {
+        // 尝试从 extra 中切出收容物段落，剩余归 base
+        if (preg_match('/^(.+?)(\n\s*收容物\s*.*)$/s', $extra, $m)) {
+            $base  = trim($m[1]);
+            $extra = trim($m[2]);
+        } else {
+            // extra 中不含收容物，整体当作 base
+            $base  = $extra;
+            $extra = '';
         }
     }
 

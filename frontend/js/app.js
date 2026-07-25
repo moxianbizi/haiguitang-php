@@ -395,6 +395,19 @@ function renderSoupPageContent(soup) {
   const hist = store.aiHistory[soup.id] || [];
   const keyOk = KeyMgr.has();
 
+  // 空汤面/汤底的友好提示
+  const hasSurface = !!(soup.surface && soup.surface.trim());
+  const hasBase = !!(soup.base && soup.base.trim());
+  const surfaceText = hasSurface
+    ? escapeHtml(soup.surface)
+    : `<span class="empty-hint">（本汤暂无独立汤面${soup.host_manual ? "，请直接阅读主持人手册" : ""}）</span>`;
+  const baseBlock = hasBase ? `
+        <div class="section-label base">
+          <span>汤底</span>
+          <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
+        </div>
+        <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base)}</div>` : '';
+
   $("#app").innerHTML = `
     <div class="page soup-detail-page">
       ${headerHtml("")}
@@ -408,18 +421,20 @@ function renderSoupPageContent(soup) {
         </div>
 
         <div class="section-label">汤面</div>
-        <div class="text-block">${escapeHtml(soup.surface || "（暂无汤面）")}</div>
+        <div class="text-block">${surfaceText}</div>
 
         <div class="section-label ai">向 AI 主持人提问</div>
         <div class="ai-area">
           <p class="ai-hint">
-            ${keyOk
-              ? "AI 只会回答「是」「否」「无关」，猜中汤底会提示。汤底不会泄露给 AI 之外的任何人。"
-              : `<span class="warn">尚未配置 DeepSeek API Key，</span>点击右上角 ⚙ 填入你自己的 Key 后即可提问。`}
+            ${!hasBase
+              ? `<span class="warn">本汤暂无汤底，AI 主持人无法作答。</span>`
+              : keyOk
+                ? "AI 只会回答「是」「否」「无关」，猜中汤底会提示。汤底不会泄露给 AI 之外的任何人。"
+                : `<span class="warn">尚未配置 DeepSeek API Key，</span>点击右上角 ⚙ 填入你自己的 Key 后即可提问。`}
           </p>
           <div class="ai-history" id="aiHistory">
             ${hist.length === 0
-              ? `<div class="ai-empty">还没有提问记录。试试问「主角是男性吗？」</div>`
+              ? `<div class="ai-empty">${hasBase ? "还没有提问记录。试试问「主角是男性吗？」" : "本汤无汤底，无法提问。"}</div>`
               : hist.map((t) => `
                 <div class="ai-turn">
                   <div class="ai-q">${escapeHtml(t.q)}</div>
@@ -428,17 +443,12 @@ function renderSoupPageContent(soup) {
               `).join("")}
           </div>
           <div class="ai-input-row">
-            <input type="text" id="aiQuestionInput" placeholder="问 AI 一个是非题…" ${keyOk ? "" : "disabled"} onkeydown="if(event.key==='Enter')askAiSingle(${soup.id})" />
-            <button onclick="askAiSingle(${soup.id})" ${keyOk ? "" : "disabled"}>提问</button>
+            <input type="text" id="aiQuestionInput" placeholder="问 AI 一个是非题…" ${(keyOk && hasBase) ? "" : "disabled"} onkeydown="if(event.key==='Enter')askAiSingle(${soup.id})" />
+            <button onclick="askAiSingle(${soup.id})" ${(keyOk && hasBase) ? "" : "disabled"}>提问</button>
           </div>
         </div>
 
-        ${soup.base ? `
-        <div class="section-label base">
-          <span>汤底</span>
-          <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
-        </div>
-        <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base)}</div>` : ''}
+        ${baseBlock}
 
         ${soup.host_manual ? `
         <div class="section-label base">
@@ -1361,6 +1371,7 @@ async function adminSoups(page = 1) {
           <button class="btn btn-secondary admin-btn-sm" onclick="adminSoupEditModal()">+ 新建汤</button>
           <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsImport()">📁 批量导入</button>
           <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsReimport()" title="用最新解析规则重新解析所有汤（刷新主持人手册/其他内容字段）">🔄 重新解析</button>
+          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsBroken()" title="检测汤面/汤底为空或疑似内容混入的汤">🩺 坏汤检测</button>
         </div>
       </div>
       <table class="admin-table">
@@ -1462,6 +1473,57 @@ window.adminSoupsReimport = async () => {
   if (!ok) { toast(data.error || "重新解析失败", "err"); return; }
   toast(data.msg || "已重新解析", "ok");
   adminSoups();
+};
+
+window.adminSoupsBroken = async () => {
+  const c = $("#adminContent");
+  c.innerHTML = `<div class="admin-section"><div class="admin-toolbar"><h2 class="admin-title">🩺 坏汤检测</h2></div><div class="admin-loading">检测中…</div></div>`;
+  const { ok, data } = await AdminAPI.get("/api/admin/soups/broken");
+  if (!ok) { c.innerHTML = `<div class="admin-error">${escapeHtml(data.error || "检测失败")}</div>`; return; }
+
+  const broken = data.broken || [];
+  if (!broken.length) {
+    c.innerHTML = `
+      <div class="admin-section">
+        <div class="admin-toolbar"><h2 class="admin-title">🩺 坏汤检测</h2></div>
+        <div class="admin-empty">
+          <p>✅ 全部 ${data.total} 碗汤均正常，未发现汤面/汤底为空或内容混入。</p>
+          <button class="btn btn-ghost" onclick="adminSoups()">← 返回汤管理</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <div class="admin-toolbar">
+        <h2 class="admin-title">🩺 坏汤检测</h2>
+        <div class="admin-toolbar-right">
+          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoups()">← 返回汤管理</button>
+          <button class="btn btn-primary admin-btn-sm" onclick="adminSoupsReimport()">🔄 重新解析后再测</button>
+        </div>
+      </div>
+      <p class="admin-tip">共 ${data.total} 碗汤，发现 <strong>${broken.length}</strong> 碗需要修复。点击「编辑」可手动修正汤面/汤底/主持人手册/其他内容。</p>
+      <table class="admin-table">
+        <thead><tr><th>ID</th><th>标题</th><th>系列/集</th><th>问题</th><th>字数(面/底/手册)</th><th>操作</th></tr></thead>
+        <tbody>
+          ${broken.map(s => `
+            <tr>
+              <td>${s.id}</td>
+              <td>${escapeHtml(s.title)}</td>
+              <td>${escapeHtml(s.season || '-')} ${escapeHtml(s.episode || '')}</td>
+              <td><span class="admin-tag-warn">${s.issues.map(escapeHtml).join('；')}</span></td>
+              <td>${s.surface_len} / ${s.base_len} / ${s.host_manual_len}</td>
+              <td class="admin-actions">
+                <button class="admin-act-btn" onclick="adminSoupEditModal(${s.id})">编辑</button>
+                <a class="admin-act-btn" href="#/soup/${s.id}" target="_blank">预览</a>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 };
 
 // ---- 房间管理 ----
