@@ -376,13 +376,17 @@ function admin_soups_import() {
     json_ok(['msg' => "导入 $imported 碗，跳过 $skipped 碗（已存在）", 'imported' => $imported, 'skipped' => $skipped]);
 }
 
-/** 重新解析所有 MD 文件，刷新已有汤的字段（用于 parse_md 升级后） */
+/** 重新解析所有 MD 文件，刷新已有汤的字段（用于 parse_md 升级后 / 全量换汤） */
 function admin_soups_reimport() {
     $result = DB::reimport_all();
     log_admin_action('soup_reimport', '', json_encode($result, JSON_UNESCAPED_UNICODE));
-    $msg = "已重新解析 {$result['updated']} 碗";
-    if (!empty($result['skipped'])) $msg .= "，跳过 {$result['skipped']} 碗（文件不存在）";
-    if (!empty($result['error'])) $msg .= "，错误：{$result['error']}";
+    $parts = [];
+    if (!empty($result['updated']))  $parts[] = "更新 {$result['updated']} 碗";
+    if (!empty($result['imported'])) $parts[] = "新增 {$result['imported']} 碗";
+    if (!empty($result['deleted']))  $parts[] = "删除 {$result['deleted']} 碗（源文件已移除）";
+    if (!empty($result['skipped']))  $parts[] = "跳过 {$result['skipped']} 碗";
+    if (!empty($result['error']))    $parts[] = "错误：{$result['error']}";
+    $msg = $parts ? implode('，', $parts) : '无变更';
     json_ok(['msg' => $msg] + $result);
 }
 

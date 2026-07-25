@@ -179,19 +179,52 @@ class DB {
         }
 
         require_once __DIR__ . '/lib/md.php';
+
+        // 1. 更新已存在的汤（源文件仍在的）
         $rows = $pdo->query('SELECT id, filename FROM soups')->fetchAll();
         $stmt = $pdo->prepare('UPDATE soups SET title=?, season=?, episode=?, surface=?, base=?, host_manual=?, extra=? WHERE id=?');
-        $updated = 0; $skipped = 0;
+        $updated = 0; $skipped = 0; $deleted = 0;
         $pdo->beginTransaction();
+        $existingFiles = []; // 数据库中已有但源文件不存在的汤 id
         foreach ($rows as $row) {
             $file = $dir . '/' . $row['filename'];
-            if (!is_file($file)) { $skipped++; continue; }
+            if (!is_file($file)) { $existingFiles[] = (int)$row['id']; continue; }
             $content = file_get_contents($file);
             $p = parse_md($row['filename'], $content);
             $stmt->execute([$p['title'], $p['season'], $p['episode'], $p['surface'], $p['base'], $p['host_manual'], $p['extra'], $row['id']]);
             $updated++;
         }
+        // 2. 删除源文件已不存在的汤（全量替换场景）
+        if ($existingFiles) {
+            $delStmt = $pdo->prepare('DELETE FROM soups WHERE id = ?');
+            foreach ($existingFiles as $id) { $delStmt->execute([$id]); $deleted++; }
+        }
         $pdo->commit();
-        return ['updated' => $updated, 'skipped' => $skipped, 'total' => count($rows)];
+
+        // 3. 导入新增的汤（源目录有但数据库没有的）
+        $dbFiles = array_column($rows, 'filename');
+        $dirFiles = array_filter(scandir($dir), fn($f) => str_ends_with($f, '.md'));
+        $newFiles = array_diff($dirFiles, $dbFiles);
+        $imported = 0;
+        if ($newFiles) {
+            sort($newFiles, SORT_NATURAL | SORT_FLAG_CASE);
+            $insStmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, host_manual, extra, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)');
+            $pdo->beginTransaction();
+            foreach ($newFiles as $f) {
+                $content = file_get_contents($dir . '/' . $f);
+                $p = parse_md($f, $content);
+                $insStmt->execute([$p['filename'], $p['season'], $p['episode'], $p['title'], $p['surface'], $p['base'], $p['host_manual'], $p['extra']]);
+                $imported++;
+            }
+            $pdo->commit();
+        }
+
+        return [
+            'updated'  => $updated,
+            'skipped'  => $skipped,
+            'deleted'  => $deleted,
+            'imported' => $imported,
+            'total'    => count($rows),
+        ];
     }
 }
