@@ -1357,8 +1357,11 @@ window.adminUserDelete = async (id, name) => {
 // ---- 汤管理 ----
 async function adminSoups(page = 1) {
   const q = $("#adminSearch")?.value || "";
-  const { ok, data } = await AdminAPI.get(`/api/admin/soups?page=${page}&q=${encodeURIComponent(q)}`);
+  // 立即显示 loading，避免点击翻页时"无反应"的错觉
   const c = $("#adminContent");
+  if (c) c.innerHTML = `<div class="admin-loading"><div class="spinner"></div></div>`;
+  const { ok, data } = await AdminAPI.get(`/api/admin/soups?page=${page}&q=${encodeURIComponent(q)}`);
+  if (!c) return;
   if (!ok) { c.innerHTML = `<div class="admin-error">${escapeHtml(data.error || "加载失败")}</div>`; return; }
 
   c.innerHTML = `
@@ -1401,8 +1404,9 @@ window.adminSoups = adminSoups;
 window.adminSoupEditModal = async (id) => {
   let soup = { title: '', season: '', episode: '', surface: '', base: '', host_manual: '', extra: '', filename: '' };
   if (id) {
-    const { ok, data } = await AdminAPI.get(`/api/admin/soups`);
-    if (ok) soup = data.soups.find(s => s.id === id) || soup;
+    // 用单条汤接口获取，避免只查第一页导致跨页汤找不到
+    const { ok, data } = await API.json(`/api/soups/${id}`);
+    if (ok && data) soup = { ...soup, ...data };
   }
   const root = $("#modalRoot");
   root.innerHTML = `
