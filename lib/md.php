@@ -12,54 +12,71 @@
  */
 
 /**
- * 规则类汤面整理：识别汤面末尾的「（注：2、4、6、8为红字规则，即反话）」说明，
- * 把规则条目按编号分行，并对命中红字编号的条目用 <em> 包裹（前端 em 渲染为红色规则）。
+ * 规则类汤面整理：
+ *  1. 编号条目分行：汤面含 3+ 个数字编号条目（1. 2. 3. 或 1． 2． 或 1、2、）时，
+ *     每条独占一行（marked breaks:true 把单换行转 <br> 渲染多行）
+ *  2. 红字规则标记：若汤面尾部有「X、X为红字规则」说明，对应条目用 <em> 包裹
+ *     （前端 em 渲染为红色规则），并移除说明括号
  *
- * 处理流程：
- * 1. 从汤面尾部匹配「X、X、X为红字规则[，即...]」说明，提取红字编号集合
- * 2. 移除说明括号
- * 3. 按「数字.」「数字．」「数字、」切分条目，每条独占一行（marked breaks:true 渲染为多行）
- * 4. 命中红字编号的条目用 <em> 包裹
+ * 不处理的情形：
+ *  - 编号是日期（如"10.1日"）或版本号等非条目：要求编号后紧跟中文内容
+ *  - 条目少于 3 个：避免误拆普通正文
  *
  * @param string $surface 汤面原文
- * @return string 处理后的汤面（条目已分行，红字条目已包裹 <em>，说明括号已移除）
+ * @return string 处理后的汤面
  */
 function apply_red_rule_marker(string $surface): string {
     if ($surface === '') return $surface;
 
-    // 匹配尾部的红字规则说明：（注：X、X为红字规则[，即...]）或（X、X为红字规则）
-    // 说明可能在末尾，也可能后跟其他文字；用非贪婪匹配到"为红字规则"为止
-    if (!preg_match('/（[^）]*?([\d，、,\s]+)\s*为\s*红字规则[^）]*）/u', $surface, $m)) {
-        return $surface;
+    // 先识别红字规则说明（如有），提取红字编号集合并移除说明括号
+    $redNumbers = [];
+    if (preg_match('/（[^）]*?([\d，、,\s]+)\s*为\s*红字规则[^）]*）/u', $surface, $m)) {
+        if (preg_match_all('/\d+/u', $m[1], $nm)) {
+            $redNumbers = array_unique($nm[0]);
+        }
+        $surface = preg_replace('/（[^）]*?[\d，、,\s]+\s*为\s*红字规则[^）]*）/u', '', $surface);
     }
-    $numbersStr = $m[1];
-    // 提取所有数字
-    if (!preg_match_all('/\d+/u', $numbersStr, $nm)) {
-        return $surface;
-    }
-    $redNumbers = array_unique($nm[0]);
-    if (empty($redNumbers)) return $surface;
-
-    // 移除说明括号（连同其后的"即反话"等说明文字）
-    $surface = preg_replace('/（[^）]*?[\d，、,\s]+\s*为\s*红字规则[^）]*）/u', '', $surface);
 
     // 按条目编号切分：支持「1.」「1．」「1、」三种分隔符
-    // 用正则把每条拆出来：编号 + 内容（到下一个编号或字符串末尾）
-    $pattern = '/(\d+)[.．、]\s*([^ ]*?)(?=(?:\d+[.．、])|$)/u';
-    if (!preg_match_all($pattern, $surface, $items, PREG_SET_ORDER)) {
+    // 排除日期/版本号：编号后不能紧跟数字（如"10.1日"的".1"不匹配）
+    // 允许编号后跟空格或直接跟中文/字母
+    $pattern = '/(\d+)[.．、](?!\d)/u';
+    if (!preg_match_all($pattern, $surface, $matches, PREG_OFFSET_CAPTURE)) {
         return $surface;
+    }
+    // 至少 3 个编号才算规则类汤面，避免误拆普通正文
+    if (count($matches[0]) < 3) {
+        return $surface;
+    }
+
+    // 按编号位置切分成条目：每条 = 该编号到下一个编号之间的内容
+    $items = [];
+    $positions = $matches[0];
+    $posCount = count($positions);
+    // 保留第一个编号前的前导文字（如"我们...发现了一张纸条："）
+    $preamble = trim(substr($surface, 0, $positions[0][1]));
+    if ($preamble !== '') {
+        $items[] = ['num' => '', 'text' => $preamble];
+    }
+    for ($i = 0; $i < $posCount; $i++) {
+        $start = $positions[$i][1];
+        $end = ($i + 1 < $posCount) ? $positions[$i + 1][1] : strlen($surface);
+        $item = substr($surface, $start, $end - $start);
+        // 提取编号数字
+        preg_match('/^(\d+)/', $positions[$i][0], $im);
+        $num = $im[1];
+        $items[] = ['num' => $num, 'text' => trim($item)];
     }
 
     // 重建汤面：每条独占一行，命中红字编号的用 <em> 包裹
-    // （marked breaks:true 会把单换行转 <br>，实现分行显示）
     $lines = [];
     foreach ($items as $item) {
-        $num = $item[1];
-        $full = trim($item[0]); // 编号 + 内容
-        if (in_array($num, $redNumbers, true)) {
-            $lines[] = "<em>{$full}</em>";
+        $text = $item['text'];
+        if ($text === '') continue;
+        if (in_array($item['num'], $redNumbers, true)) {
+            $lines[] = "<em>{$text}</em>";
         } else {
-            $lines[] = $full;
+            $lines[] = $text;
         }
     }
     return implode("\n", $lines);
@@ -236,9 +253,9 @@ function parse_md(string $filename, string $content): array {
         $hostManual = trim($m[2]);
     }
 
-    // 红字规则自动标记：识别汤面末尾的「（注：2、4、6、8为红字规则，即反话）」说明，
-    // 提取编号，把对应条目用 <em> 包裹（前端 em 渲染为红色规则）。
-    // 仅处理有明确「X、X为红字规则」编号说明的汤（如 S3E16 白雪公主）。
+    // 规则类汤面整理：
+    // 1. 编号条目分行：汤面含 3+ 个数字编号条目时，每条独占一行（marked breaks 渲染多行）
+    // 2. 红字规则标记：识别「X、X为红字规则」说明，对应条目用 <em> 包裹
     $surface = apply_red_rule_marker($surface);
 
     // 图片路径转换：./海龟汤图片/ → /soups-img/
