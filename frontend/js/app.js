@@ -36,8 +36,9 @@ function escapeJs(str) {
 /**
  * 安全渲染 Markdown 为 HTML。
  * - 使用 marked 解析表格/加粗/斜体/列表等语法
- * - 配置 marked 不解析原始 HTML（避免 XSS）
- * - 给"解析"相关段落自动套楷体（规则怪谈类汤用楷体区分解析内容）
+ * - 保留颜色版汤源的 <span style="color: blue;">（蓝色规则）等安全 HTML
+ * - 过滤危险标签（script/iframe/on* 事件），防 XSS
+ * - 给"解析"段落自动套楷体（规则怪谈类汤用楷体区分解析内容）
  * @param {string} md 原始 markdown 文本
  * @returns {string} 安全的 HTML
  */
@@ -55,24 +56,25 @@ function renderMd(md) {
   }
   let html;
   if (typeof marked !== "undefined") {
-    // marked 12.x: marked.parse 返回 string
     html = marked.parse(String(md ?? ""));
-    // 防御性：移除原始 <script> / on* 事件（marked 默认不输出这些，但双保险）
+    // XSS 防护：移除危险标签和事件属性（保留 span/em/img/br 等安全标签）
     html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+               .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+               .replace(/<object\b[^>]*>/gi, "").replace(/<\/object>/gi, "")
+               .replace(/<embed\b[^>]*>/gi, "")
                .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
                .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-               .replace(/\son\w+\s*=\s*[^\s>]+/gi, "");
+               .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
+               .replace(/javascript:/gi, "");
   } else {
     // marked 加载失败时回退到纯文本转义
     html = escapeHtml(md).replace(/\n/g, "<br>");
   }
 
-  // 楷体处理：把含"解析"关键词的段落（<p>...</p> 或 <li>...</li>）套上 kaiti class
-  // 匹配"怪谈解析""前置规则解析""隐藏规则解析""故事梗概"等
+  // 楷体处理：把含"解析"关键词的段落套上 kaiti class
   html = html.replace(/<p>([^<]*(?:解析|梗概|结局)[^<]*)<\/p>/gi, (m, inner) => {
     return `<p class="kaiti">${inner}</p>`;
   });
-  // 也处理标题行形式的"怪谈解析"（单独成段、后跟表格的情况）
   html = html.replace(/<p>(怪谈解析[^<]*)<\/p>/gi, '<p class="kaiti">$1</p>');
 
   return html;

@@ -2444,7 +2444,21 @@ input, textarea {
 
 /* 加粗 / 斜体 */
 .md-body strong { font-weight: 700; color: var(--text-1, #f2f4f8); }
-.md-body em { font-style: italic; color: #a7c7ff; }
+.md-body em { font-style: italic; color: #ff6b6b; } /* 红色规则：倾斜体 */
+
+/* 蓝色规则：<span style="color: blue;"> 下划线标注 */
+.md-body span[style*="color: blue"],
+.md-body span[style*="color:blue"] {
+  color: #4dabf7 !important;
+  font-weight: 500;
+  text-decoration: none;
+}
+/* 蓝色规则内的加粗保持蓝色 */
+.md-body span[style*="color: blue"] strong,
+.md-body span[style*="color:blue"] strong {
+  color: #4dabf7;
+  font-weight: 700;
+}
 
 /* 删除线 */
 .md-body del { color: var(--text-3, #768094); }
@@ -2544,3 +2558,15 @@ input, textarea {
   .md-body table { font-size: 0.82rem; }
   .md-body th, .md-body td { padding: 6px 8px; }
 }
+
+/* 图片：海龟汤图片（收容物、残响碎片等） */
+.md-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  display: block;
+  margin: 8px auto;
+  background: rgba(255, 255, 255, 0.03);
+}
+/* 表格内的图片不要 auto margin，限制宽度 */
+.md-body td img { margin: 0; display: inline-block; max-width: 200px; }
