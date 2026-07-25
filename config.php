@@ -15,7 +15,7 @@ class Config {
 
     /** DeepSeek API —— 仅公开的接入地址与模型，密钥由前端用户自填 */
     public static $DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
-    public static $DEEPSEEK_MODEL = 'deepseek-chat';
+    public static $DEEPSEEK_MODEL = 'deepseek-v4-flash';
 
     /** SMTP 邮件配置（不配则验证码直接返回在响应中，仅开发模式） */
     public static $MAIL_SMTP_HOST = '';

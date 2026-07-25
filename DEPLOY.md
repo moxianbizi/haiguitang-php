@@ -130,7 +130,7 @@ server {
 | DB_PATH | `DB_PATH` | SQLite 文件路径 |
 | SOUPS_DIR | `SOUPS_DIR` | MD 汤源目录 |
 | DEEPSEEK_BASE_URL | `DEEPSEEK_BASE_URL` | DeepSeek 接口地址（默认官方） |
-| DEEPSEEK_MODEL | `DEEPSEEK_MODEL` | 模型名（默认 deepseek-chat） |
+| DEEPSEEK_MODEL | `DEEPSEEK_MODEL` | 模型名（默认 deepseek-v4-flash，可选 deepseek-v4-pro） |
 | MAIL_SMTP_HOST | `MAIL_SMTP_HOST` | SMTP 服务器 |
 | MAIL_SMTP_PORT | `MAIL_SMTP_PORT` | 端口（465 SSL / 587 STARTTLS） |
 | MAIL_SMTP_USER | `MAIL_SMTP_USER` | SMTP 用户名 |
