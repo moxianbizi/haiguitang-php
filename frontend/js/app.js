@@ -33,6 +33,51 @@ function escapeJs(str) {
   return JSON.stringify(str ?? "").slice(1, -1);
 }
 
+/**
+ * 安全渲染 Markdown 为 HTML。
+ * - 使用 marked 解析表格/加粗/斜体/列表等语法
+ * - 配置 marked 不解析原始 HTML（避免 XSS）
+ * - 给"解析"相关段落自动套楷体（规则怪谈类汤用楷体区分解析内容）
+ * @param {string} md 原始 markdown 文本
+ * @returns {string} 安全的 HTML
+ */
+function renderMd(md) {
+  if (!md) return "";
+  // 初始化 marked（只初始化一次）
+  if (typeof marked !== "undefined" && !renderMd._inited) {
+    marked.setOptions({
+      gfm: true,        // GitHub Flavored Markdown（表格、删除线等）
+      breaks: true,     // 单换行也转 <br>
+      headerIds: false, // 不给标题加 id
+      mangle: false,
+    });
+    renderMd._inited = true;
+  }
+  let html;
+  if (typeof marked !== "undefined") {
+    // marked 12.x: marked.parse 返回 string
+    html = marked.parse(String(md ?? ""));
+    // 防御性：移除原始 <script> / on* 事件（marked 默认不输出这些，但双保险）
+    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+               .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+               .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+               .replace(/\son\w+\s*=\s*[^\s>]+/gi, "");
+  } else {
+    // marked 加载失败时回退到纯文本转义
+    html = escapeHtml(md).replace(/\n/g, "<br>");
+  }
+
+  // 楷体处理：把含"解析"关键词的段落（<p>...</p> 或 <li>...</li>）套上 kaiti class
+  // 匹配"怪谈解析""前置规则解析""隐藏规则解析""故事梗概"等
+  html = html.replace(/<p>([^<]*(?:解析|梗概|结局)[^<]*)<\/p>/gi, (m, inner) => {
+    return `<p class="kaiti">${inner}</p>`;
+  });
+  // 也处理标题行形式的"怪谈解析"（单独成段、后跟表格的情况）
+  html = html.replace(/<p>(怪谈解析[^<]*)<\/p>/gi, '<p class="kaiti">$1</p>');
+
+  return html;
+}
+
 function toast(msg, type = "") {
   const t = $("#toast");
   if (!t) return;
@@ -399,14 +444,14 @@ function renderSoupPageContent(soup) {
   const hasSurface = !!(soup.surface && soup.surface.trim());
   const hasBase = !!(soup.base && soup.base.trim());
   const surfaceText = hasSurface
-    ? escapeHtml(soup.surface)
+    ? renderMd(soup.surface)
     : `<span class="empty-hint">（本汤暂无独立汤面${soup.host_manual ? "，请直接阅读主持人手册" : ""}）</span>`;
   const baseBlock = hasBase ? `
         <div class="section-label base">
           <span>汤底</span>
           <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
         </div>
-        <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base)}</div>` : '';
+        <div class="text-block md-body reveal collapsed" id="baseBlock" style="display:none">${renderMd(soup.base)}</div>` : '';
 
   $("#app").innerHTML = `
     <div class="page soup-detail-page">
@@ -421,7 +466,7 @@ function renderSoupPageContent(soup) {
         </div>
 
         <div class="section-label">汤面</div>
-        <div class="text-block">${surfaceText}</div>
+        <div class="text-block md-body">${surfaceText}</div>
 
         <div class="section-label ai">向 AI 主持人提问</div>
         <div class="ai-area">
@@ -455,14 +500,14 @@ function renderSoupPageContent(soup) {
           <span>主持人手册</span>
           <button class="reveal-toggle" id="manualToggle" onclick="revealManual(event)">▶ 点击展开主持人手册</button>
         </div>
-        <div class="text-block reveal collapsed" id="manualBlock" style="display:none">${escapeHtml(soup.host_manual)}</div>` : ''}
+        <div class="text-block md-body reveal collapsed" id="manualBlock" style="display:none">${renderMd(soup.host_manual)}</div>` : ''}
 
         ${soup.extra ? `
         <div class="section-label base">
           <span>其他内容</span>
           <button class="reveal-toggle" id="extraToggle" onclick="revealExtra(event)">▶ 点击展开其他内容</button>
         </div>
-        <div class="text-block reveal collapsed" id="extraBlock" style="display:none">${escapeHtml(soup.extra)}</div>` : ''}
+        <div class="text-block md-body reveal collapsed" id="extraBlock" style="display:none">${renderMd(soup.extra)}</div>` : ''}
 
         <div class="soup-detail-actions">
           <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>

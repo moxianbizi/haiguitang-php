@@ -2412,3 +2412,135 @@ input, textarea {
     padding-bottom: 40px;
   }
 }
+
+/* ===================== Markdown 渲染样式 ===================== */
+/* md-body 容器：覆盖 .text-block 的 pre-wrap，让 marked 输出的 HTML 正常排版 */
+.text-block.md-body {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.md-body > *:first-child { margin-top: 0; }
+.md-body > *:last-child { margin-bottom: 0; }
+
+/* 段落 */
+.md-body p {
+  margin: 0 0 10px 0;
+  line-height: 1.7;
+}
+
+/* 标题 */
+.md-body h1, .md-body h2, .md-body h3,
+.md-body h4, .md-body h5, .md-body h6 {
+  margin: 16px 0 8px 0;
+  font-weight: 700;
+  color: var(--text-1, #f2f4f8);
+  line-height: 1.4;
+}
+.md-body h1 { font-size: 1.25rem; }
+.md-body h2 { font-size: 1.15rem; }
+.md-body h3 { font-size: 1.05rem; }
+.md-body h4, .md-body h5, .md-body h6 { font-size: 1rem; }
+
+/* 加粗 / 斜体 */
+.md-body strong { font-weight: 700; color: var(--text-1, #f2f4f8); }
+.md-body em { font-style: italic; color: #a7c7ff; }
+
+/* 删除线 */
+.md-body del { color: var(--text-3, #768094); }
+
+/* 引用块（汤源里的 > 选自...） */
+.md-body blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid rgba(110, 231, 255, 0.4);
+  background: rgba(110, 231, 255, 0.05);
+  color: var(--text-3, #768094);
+  font-size: 0.88rem;
+  border-radius: 0 6px 6px 0;
+}
+
+/* 列表 */
+.md-body ul, .md-body ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+.md-body li { margin: 4px 0; line-height: 1.7; }
+
+/* 表格（规则怪谈汤大量使用） */
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 0.9rem;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.md-body thead { background: rgba(255, 255, 255, 0.04); }
+.md-body th, .md-body td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.7;
+  word-break: break-word;
+}
+.md-body th { font-weight: 600; color: var(--text-1, #f2f4f8); }
+.md-body tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+
+/* 代码 */
+.md-body code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 0.85em;
+  color: #ffb86c;
+}
+.md-body pre {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.md-body pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* 分隔线 */
+.md-body hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 16px 0;
+}
+
+/* 链接 */
+.md-body a {
+  color: #6ee7ff;
+  text-decoration: none;
+  word-break: break-all;
+}
+.md-body a:hover { text-decoration: underline; }
+
+/* 楷体：用于规则怪谈类汤的"解析"段落，区分正文与解析 */
+.md-body .kaiti,
+.md-body p.kaiti {
+  font-family: "KaiTi", "STKaiti", "楷体", "Noto Serif SC", serif;
+  font-style: normal;
+  color: #c9d1d9;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 6px 10px;
+  border-left: 2px solid rgba(167, 139, 250, 0.3);
+  margin: 8px 0;
+  border-radius: 0 4px 4px 0;
+}
+
+/* 移动端表格滚动提示 */
+@media (max-width: 640px) {
+  .md-body table { font-size: 0.82rem; }
+  .md-body th, .md-body td { padding: 6px 8px; }
+}
