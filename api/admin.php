@@ -5,27 +5,32 @@ function handle_admin(array $segments) {
     $admin = require_admin();
     $action = $segments[1] ?? '';
     $method = $_SERVER['REQUEST_METHOD'];
+    // 用 null 合并避免访问未定义数组键（PHP 8+ 会触发 warning，
+    // 被全局 set_error_handler 转成未捕获异常导致 500）
+    $seg2 = $segments[2] ?? '';
+    $seg3 = $segments[3] ?? '';
+    $hasSeg2 = isset($segments[2]) && ctype_digit($segments[2]);
 
     if ($action === 'stats' && $method === 'GET') admin_stats();
     elseif ($action === 'users' && $method === 'GET') admin_users_list();
     elseif ($action === 'users' && $method === 'POST') admin_users_create();
-    elseif ($action === 'soups' && $method === 'GET' && $segments[2] === 'broken') admin_soups_broken();
+    elseif ($action === 'soups' && $method === 'GET' && $seg2 === 'broken') admin_soups_broken();
     elseif ($action === 'soups' && $method === 'GET') admin_soups_list();
     // 带子路径的 POST 必须放在通用 soups POST 之前，否则会被 admin_soups_create 抢先匹配
-    elseif ($action === 'soups' && $segments[2] === 'import' && $method === 'POST') admin_soups_import();
-    elseif ($action === 'soups' && $segments[2] === 'reimport' && $method === 'POST') admin_soups_reimport();
-    elseif ($action === 'soups' && $segments[2] === 'rebuild' && $method === 'POST') admin_soups_rebuild();
+    elseif ($action === 'soups' && $seg2 === 'import' && $method === 'POST') admin_soups_import();
+    elseif ($action === 'soups' && $seg2 === 'reimport' && $method === 'POST') admin_soups_reimport();
+    elseif ($action === 'soups' && $seg2 === 'rebuild' && $method === 'POST') admin_soups_rebuild();
     elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
-    elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'PUT') admin_soups_update((int)$segments[2]);
-    elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
+    elseif ($action === 'soups' && $hasSeg2 && $method === 'PUT') admin_soups_update((int)$segments[2]);
+    elseif ($action === 'soups' && $hasSeg2 && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
     elseif ($action === 'rooms' && $method === 'GET') admin_rooms_list();
-    elseif ($action === 'rooms' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_rooms_delete((int)$segments[2]);
-    elseif ($action === 'rooms' && isset($segments[2]) && ctype_digit($segments[2]) && $segments[3] === 'status' && $method === 'PUT') admin_rooms_set_status((int)$segments[2]);
-    elseif ($action === 'rooms' && isset($segments[2]) && ctype_digit($segments[2]) && $segments[3] === 'messages' && $method === 'GET') admin_room_messages((int)$segments[2]);
-    elseif ($action === 'messages' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_messages_delete((int)$segments[2]);
-    elseif ($action === 'users' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'PUT') admin_users_update((int)$segments[2]);
-    elseif ($action === 'users' && isset($segments[2]) && ctype_digit($segments[2]) && $segments[3] === 'password' && $method === 'PUT') admin_users_reset_password((int)$segments[2]);
-    elseif ($action === 'users' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_users_delete((int)$segments[2]);
+    elseif ($action === 'rooms' && $hasSeg2 && $method === 'DELETE') admin_rooms_delete((int)$segments[2]);
+    elseif ($action === 'rooms' && $hasSeg2 && $seg3 === 'status' && $method === 'PUT') admin_rooms_set_status((int)$segments[2]);
+    elseif ($action === 'rooms' && $hasSeg2 && $seg3 === 'messages' && $method === 'GET') admin_room_messages((int)$segments[2]);
+    elseif ($action === 'messages' && $hasSeg2 && $method === 'DELETE') admin_messages_delete((int)$segments[2]);
+    elseif ($action === 'users' && $hasSeg2 && $method === 'PUT') admin_users_update((int)$segments[2]);
+    elseif ($action === 'users' && $hasSeg2 && $seg3 === 'password' && $method === 'PUT') admin_users_reset_password((int)$segments[2]);
+    elseif ($action === 'users' && $hasSeg2 && $method === 'DELETE') admin_users_delete((int)$segments[2]);
     elseif ($action === 'settings' && $method === 'GET') admin_settings_get();
     elseif ($action === 'settings' && $method === 'PUT') admin_settings_update();
     elseif ($action === 'logs' && $method === 'GET') admin_logs();
