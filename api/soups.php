@@ -55,19 +55,26 @@ function soups_seasons() {
 
 function soups_detail(int $id) {
     $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base FROM soups WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base, host_manual, extra FROM soups WHERE id = ?');
     $stmt->execute([$id]);
     $s = $stmt->fetch();
     if (!$s) json_error('未找到', 404);
-    // 汤底（答案）仅登录用户可见
-    if (!isset($_SESSION['user_id'])) {
-        unset($s['base']);
-    }
     json_ok($s);
 }
 
+/** 构造完整 MD（含主持人手册/其他内容） */
+function soups_build_md(array $s): string {
+    $md = "# {$s['title']}\n\n";
+    if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
+    if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
+    $md .= "汤面{$s['surface']}\n\n汤底{$s['base']}\n";
+    if (!empty($s['host_manual'])) $md .= "\n主持人手册{$s['host_manual']}\n";
+    if (!empty($s['extra']))      $md .= "\n{$s['extra']}\n";
+    return $md;
+}
+
 function soups_download(int $id) {
-    // 下载含汤底，必须登录
+    // 下载含汤底/主持人手册，必须登录
     require_login();
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT * FROM soups WHERE id = ?');
@@ -94,12 +101,8 @@ function soups_download(int $id) {
         echo $bom;
         readfile($realFile);
     } else {
-        // 动态生成
-        $md = "# {$s['title']}\n\n";
-        if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
-        if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
-        $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
-        echo $bom . $md;
+        // 动态生成（含主持人手册/其他内容）
+        echo $bom . soups_build_md($s);
     }
     exit;
 }
@@ -112,6 +115,8 @@ function soups_create() {
     $title = trim($data['title'] ?? '');
     $surface = trim($data['surface'] ?? '');
     $base = trim($data['base'] ?? '');
+    $hostManual = trim($data['host_manual'] ?? '');
+    $extra = trim($data['extra'] ?? '');
     $season = trim($data['season'] ?? '');
     $episode = trim($data['episode'] ?? '');
     if ($title === '' || $surface === '' || $base === '') json_error('标题、汤面、汤底不能为空');
@@ -134,19 +139,16 @@ function soups_create() {
     $stmt->execute();
     $order = (int)$stmt->fetchColumn() + 1;
 
-    $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, author_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    $stmt->execute([$filename, $season, $episode, $title, $surface, $base, $user['id'], $order]);
+    $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, host_manual, extra, author_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$filename, $season, $episode, $title, $surface, $base, $hostManual, $extra, $user['id'], $order]);
     $id = (int)$pdo->lastInsertId();
 
-    // 写 MD
+    // 写 MD（含主持人手册/其他内容）
+    $s = compact('title', 'season', 'episode', 'surface', 'base') + ['host_manual' => $hostManual, 'extra' => $extra];
     @mkdir(Config::$SOUPS_DIR, 0755, true);
-    $md = "# {$title}\n\n";
-    if ($season) $md .= "**季：**{$season}\n\n";
-    if ($episode) $md .= "**集：**{$episode}\n\n";
-    $md .= "## 汤面\n\n{$surface}\n\n## 汤底\n\n{$base}\n";
-    @file_put_contents(Config::$SOUPS_DIR . '/' . $filename, $md);
+    @file_put_contents(Config::$SOUPS_DIR . '/' . $filename, soups_build_md($s));
 
-    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base FROM soups WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base, host_manual, extra FROM soups WHERE id = ?');
     $stmt->execute([$id]);
     json_ok($stmt->fetch(), 201);
 }
@@ -160,28 +162,24 @@ function soups_update(int $id) {
     if (!$s) json_error('未找到', 404);
 
     $data = body_json();
-    foreach (['title', 'surface', 'base', 'season', 'episode'] as $f) {
+    foreach (['title', 'surface', 'base', 'host_manual', 'extra', 'season', 'episode'] as $f) {
         if (array_key_exists($f, $data)) $s[$f] = trim((string)$data[$f]);
     }
     if ($s['title'] === '') json_error('标题不能为空');
     validate_length($s['surface'], 50000, '汤面');
     validate_length($s['base'], 50000, '汤底');
 
-    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, season=?, episode=? WHERE id=?');
-    $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['season'], $s['episode'], $id]);
+    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, host_manual=?, extra=?, season=?, episode=? WHERE id=?');
+    $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['host_manual'], $s['extra'], $s['season'], $s['episode'], $id]);
 
     // 同步 MD
-    $md = "# {$s['title']}\n\n";
-    if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
-    if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
-    $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
     $soupsDir = realpath(Config::$SOUPS_DIR);
     $filePath = Config::$SOUPS_DIR . '/' . $s['filename'];
     if ($soupsDir !== false && str_starts_with(realpath(dirname($filePath) ?: $filePath) ?: '', $soupsDir)) {
-        @file_put_contents($filePath, $md);
+        @file_put_contents($filePath, soups_build_md($s));
     }
 
-    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base FROM soups WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base, host_manual, extra FROM soups WHERE id = ?');
     $stmt->execute([$id]);
     json_ok($stmt->fetch());
 }

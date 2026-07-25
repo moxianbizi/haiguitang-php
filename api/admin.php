@@ -12,6 +12,7 @@ function handle_admin(array $segments) {
     elseif ($action === 'soups' && $method === 'GET') admin_soups_list();
     elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
     elseif ($action === 'soups' && $segments[2] === 'import' && $method === 'POST') admin_soups_import();
+    elseif ($action === 'soups' && $segments[2] === 'reimport' && $method === 'POST') admin_soups_reimport();
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'PUT') admin_soups_update((int)$segments[2]);
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
     elseif ($action === 'rooms' && $method === 'GET') admin_rooms_list();
@@ -266,6 +267,8 @@ function admin_soups_create() {
     $title = trim($data['title'] ?? '');
     $surface = trim($data['surface'] ?? '');
     $base = trim($data['base'] ?? '');
+    $hostManual = trim($data['host_manual'] ?? '');
+    $extra = trim($data['extra'] ?? '');
     $season = trim($data['season'] ?? '');
     $episode = trim($data['episode'] ?? '');
     $filename = trim($data['filename'] ?? '');
@@ -289,16 +292,13 @@ function admin_soups_create() {
     $stmt->execute();
     $order = (int)$stmt->fetchColumn() + 1;
 
-    $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, author_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    $stmt->execute([$filename, $season, $episode, $title, $surface, $base, $admin['id'], $order]);
+    $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, host_manual, extra, author_id, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$filename, $season, $episode, $title, $surface, $base, $hostManual, $extra, $admin['id'], $order]);
     $id = (int)$pdo->lastInsertId();
 
     @mkdir(Config::$SOUPS_DIR, 0755, true);
-    $md = "# {$title}\n\n";
-    if ($season) $md .= "**季：**{$season}\n\n";
-    if ($episode) $md .= "**集：**{$episode}\n\n";
-    $md .= "## 汤面\n\n{$surface}\n\n## 汤底\n\n{$base}\n";
-    @file_put_contents(Config::$SOUPS_DIR . '/' . $filename, $md);
+    $s = compact('title', 'season', 'episode', 'surface', 'base') + ['host_manual' => $hostManual, 'extra' => $extra];
+    @file_put_contents(Config::$SOUPS_DIR . '/' . $filename, soups_build_md($s));
 
     log_admin_action('soup_create', "soup #$id", $title);
     json_ok(['id' => $id, 'msg' => '汤创建成功'], 201);
@@ -312,22 +312,18 @@ function admin_soups_update(int $id) {
     if (!$s) json_error('未找到', 404);
 
     $data = body_json();
-    foreach (['title', 'surface', 'base', 'season', 'episode'] as $f) {
+    foreach (['title', 'surface', 'base', 'host_manual', 'extra', 'season', 'episode'] as $f) {
         if (array_key_exists($f, $data)) $s[$f] = trim((string)$data[$f]);
     }
     if ($s['title'] === '') json_error('标题不能为空');
 
-    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, season=?, episode=? WHERE id=?');
-    $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['season'], $s['episode'], $id]);
+    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, host_manual=?, extra=?, season=?, episode=? WHERE id=?');
+    $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['host_manual'], $s['extra'], $s['season'], $s['episode'], $id]);
 
-    $md = "# {$s['title']}\n\n";
-    if ($s['season']) $md .= "**季：**{$s['season']}\n\n";
-    if ($s['episode']) $md .= "**集：**{$s['episode']}\n\n";
-    $md .= "## 汤面\n\n{$s['surface']}\n\n## 汤底\n\n{$s['base']}\n";
     $soupsDir = realpath(Config::$SOUPS_DIR);
     $filePath = Config::$SOUPS_DIR . '/' . $s['filename'];
     if ($soupsDir !== false && str_starts_with(realpath(dirname($filePath) ?: $filePath) ?: '', $soupsDir)) {
-        @file_put_contents($filePath, $md);
+        @file_put_contents($filePath, soups_build_md($s));
     }
 
     log_admin_action('soup_update', "soup #$id", $s['title']);
@@ -371,12 +367,22 @@ function admin_soups_import() {
 
         $content = file_get_contents($dir . '/' . $f);
         $p = parse_md($f, $content);
-        $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
-        $stmt->execute([$p['filename'], $p['season'], $p['episode'], $p['title'], $p['surface'], $p['base'], 0]);
+        $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, host_manual, extra, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([$p['filename'], $p['season'], $p['episode'], $p['title'], $p['surface'], $p['base'], $p['host_manual'], $p['extra'], 0]);
         $imported++;
     }
     log_admin_action('soup_import', '', "imported=$imported, skipped=$skipped");
     json_ok(['msg' => "导入 $imported 碗，跳过 $skipped 碗（已存在）", 'imported' => $imported, 'skipped' => $skipped]);
+}
+
+/** 重新解析所有 MD 文件，刷新已有汤的字段（用于 parse_md 升级后） */
+function admin_soups_reimport() {
+    $result = DB::reimport_all();
+    log_admin_action('soup_reimport', '', json_encode($result, JSON_UNESCAPED_UNICODE));
+    $msg = "已重新解析 {$result['updated']} 碗";
+    if (!empty($result['skipped'])) $msg .= "，跳过 {$result['skipped']} 碗（文件不存在）";
+    if (!empty($result['error'])) $msg .= "，错误：{$result['error']}";
+    json_ok(['msg' => $msg] + $result);
 }
 
 // ===================== 房间管理 =====================

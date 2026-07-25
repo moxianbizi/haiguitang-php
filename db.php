@@ -60,6 +60,8 @@ class DB {
                 title TEXT NOT NULL,
                 surface TEXT,
                 base TEXT,
+                host_manual TEXT,
+                extra TEXT,
                 author_id INTEGER,
                 created_at TEXT DEFAULT (datetime('now')),
                 sort_order INTEGER DEFAULT 0,
@@ -119,6 +121,11 @@ class DB {
         if (!in_array('is_banned', $cols)) $pdo->exec('ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0');
         if (!in_array('banned_reason', $cols)) $pdo->exec('ALTER TABLE users ADD COLUMN banned_reason TEXT');
 
+        // 迁移：soups 表补 host_manual / extra 列
+        $soupCols = $pdo->query('PRAGMA table_info(soups)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('host_manual', $soupCols)) $pdo->exec('ALTER TABLE soups ADD COLUMN host_manual TEXT');
+        if (!in_array('extra', $soupCols)) $pdo->exec('ALTER TABLE soups ADD COLUMN extra TEXT');
+
         // 第一个注册的用户自动设为管理员（如果还没有管理员）
         $adminCount = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE is_admin = 1')->fetchColumn();
         if ($adminCount === 0) {
@@ -147,13 +154,44 @@ class DB {
         $files = array_filter(scandir($dir), fn($f) => str_ends_with($f, '.md'));
         sort($files, SORT_NATURAL | SORT_FLAG_CASE);
 
-        $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, host_manual, extra, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $pdo->beginTransaction();
         foreach ($files as $idx => $f) {
             $content = file_get_contents($dir . '/' . $f);
             $p = parse_md($f, $content);
-            $stmt->execute([$p['filename'], $p['season'], $p['episode'], $p['title'], $p['surface'], $p['base'], $idx]);
+            $stmt->execute([$p['filename'], $p['season'], $p['episode'], $p['title'], $p['surface'], $p['base'], $p['host_manual'], $p['extra'], $idx]);
         }
         $pdo->commit();
+    }
+
+    /**
+     * 重新解析并更新所有汤的字段（保留 id/author_id/sort_order/created_at）
+     * 用于 parse_md 升级后刷新已有数据。仅管理员可触发。
+     * @return array {updated, skipped, total}
+     */
+    public static function reimport_all(): array {
+        $pdo = self::pdo();
+        $dir = Config::$SOUPS_DIR;
+        if (!is_dir($dir)) {
+            $alt = __DIR__ . '/data/soups';
+            if (is_dir($alt)) $dir = $alt;
+            else return ['updated' => 0, 'skipped' => 0, 'total' => 0, 'error' => 'soups 目录不存在'];
+        }
+
+        require_once __DIR__ . '/lib/md.php';
+        $rows = $pdo->query('SELECT id, filename FROM soups')->fetchAll();
+        $stmt = $pdo->prepare('UPDATE soups SET title=?, season=?, episode=?, surface=?, base=?, host_manual=?, extra=? WHERE id=?');
+        $updated = 0; $skipped = 0;
+        $pdo->beginTransaction();
+        foreach ($rows as $row) {
+            $file = $dir . '/' . $row['filename'];
+            if (!is_file($file)) { $skipped++; continue; }
+            $content = file_get_contents($file);
+            $p = parse_md($row['filename'], $content);
+            $stmt->execute([$p['title'], $p['season'], $p['episode'], $p['surface'], $p['base'], $p['host_manual'], $p['extra'], $row['id']]);
+            $updated++;
+        }
+        $pdo->commit();
+        return ['updated' => $updated, 'skipped' => $skipped, 'total' => count($rows)];
     }
 }

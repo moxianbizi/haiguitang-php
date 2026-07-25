@@ -993,6 +993,14 @@ input, textarea {
   font-weight: 500;
 }
 
+.field-hint {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  color: var(--text-3);
+  font-weight: 400;
+  opacity: 0.8;
+}
+
 .input {
   width: 100%;
   padding: 14px 18px;

@@ -433,15 +433,30 @@ function renderSoupPageContent(soup) {
           </div>
         </div>
 
+        ${soup.base ? `
         <div class="section-label base">
           <span>汤底</span>
-          ${soup.base ? `<button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>` : (store.user ? `<span class="text-muted">暂无汤底</span>` : `<a href="#/auth" class="text-muted">登录后查看汤底</a>`)}
+          <button class="reveal-toggle" id="revealToggle" onclick="revealBase(event)">▶ 点击展开汤底</button>
         </div>
-        ${soup.base ? `<div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base)}</div>` : ''}
+        <div class="text-block reveal collapsed" id="baseBlock" style="display:none">${escapeHtml(soup.base)}</div>` : ''}
+
+        ${soup.host_manual ? `
+        <div class="section-label base">
+          <span>主持人手册</span>
+          <button class="reveal-toggle" id="manualToggle" onclick="revealManual(event)">▶ 点击展开主持人手册</button>
+        </div>
+        <div class="text-block reveal collapsed" id="manualBlock" style="display:none">${escapeHtml(soup.host_manual)}</div>` : ''}
+
+        ${soup.extra ? `
+        <div class="section-label base">
+          <span>其他内容</span>
+          <button class="reveal-toggle" id="extraToggle" onclick="revealExtra(event)">▶ 点击展开其他内容</button>
+        </div>
+        <div class="text-block reveal collapsed" id="extraBlock" style="display:none">${escapeHtml(soup.extra)}</div>` : ''}
 
         <div class="soup-detail-actions">
           <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
-          ${store.user ? `<a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>` : ''}
+          ${store.user ? `<a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>` : `<a href="#/auth" class="btn btn-ghost">⬇ 登录后下载</a>`}
         </div>
       </div>
       <div id="modalRoot"></div>
@@ -530,6 +545,28 @@ function revealBase(e) {
   if (toggle) toggle.textContent = collapsed ? "▼ 收起汤底" : "▶ 点击展开汤底";
 }
 window.revealBase = revealBase;
+
+function revealManual(e) {
+  e.stopPropagation();
+  const block = $("#manualBlock");
+  const toggle = $("#manualToggle");
+  if (!block) return;
+  const collapsed = block.style.display === "none";
+  block.style.display = collapsed ? "block" : "none";
+  if (toggle) toggle.textContent = collapsed ? "▼ 收起主持人手册" : "▶ 点击展开主持人手册";
+}
+window.revealManual = revealManual;
+
+function revealExtra(e) {
+  e.stopPropagation();
+  const block = $("#extraBlock");
+  const toggle = $("#extraToggle");
+  if (!block) return;
+  const collapsed = block.style.display === "none";
+  block.style.display = collapsed ? "block" : "none";
+  if (toggle) toggle.textContent = collapsed ? "▼ 收起其他内容" : "▶ 点击展开其他内容";
+}
+window.revealExtra = revealExtra;
 
 function closeModal(e) {
   if (e) e.stopPropagation();
@@ -1323,6 +1360,7 @@ async function adminSoups(page = 1) {
           <button class="btn btn-primary admin-btn-sm" onclick="adminSoups(1)">搜索</button>
           <button class="btn btn-secondary admin-btn-sm" onclick="adminSoupEditModal()">+ 新建汤</button>
           <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsImport()">📁 批量导入</button>
+          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsReimport()" title="用最新解析规则重新解析所有汤（刷新主持人手册/其他内容字段）">🔄 重新解析</button>
         </div>
       </div>
       <table class="admin-table">
@@ -1350,7 +1388,7 @@ async function adminSoups(page = 1) {
 window.adminSoups = adminSoups;
 
 window.adminSoupEditModal = async (id) => {
-  let soup = { title: '', season: '', episode: '', surface: '', base: '', filename: '' };
+  let soup = { title: '', season: '', episode: '', surface: '', base: '', host_manual: '', extra: '', filename: '' };
   if (id) {
     const { ok, data } = await AdminAPI.get(`/api/admin/soups`);
     if (ok) soup = data.soups.find(s => s.id === id) || soup;
@@ -1367,8 +1405,10 @@ window.adminSoupEditModal = async (id) => {
           <div class="field"><label>集</label><input class="input" id="es_episode" value="${escapeHtml(soup.episode || '')}" /></div>
         </div>
         <div class="field"><label>文件名（不含.md，留空自动生成）</label><input class="input" id="es_filename" value="${escapeHtml(soup.filename || '')}" /></div>
-        <div class="field"><label>汤面</label><textarea class="input" id="es_surface" rows="4">${escapeHtml(soup.surface || '')}</textarea></div>
-        <div class="field"><label>汤底</label><textarea class="input" id="es_base" rows="4">${escapeHtml(soup.base || '')}</textarea></div>
+        <div class="field"><label>汤面<span class="field-hint">玩家可见的谜面</span></label><textarea class="input" id="es_surface" rows="4">${escapeHtml(soup.surface || '')}</textarea></div>
+        <div class="field"><label>汤底<span class="field-hint">仅 AI 可读，不主动透露给玩家</span></label><textarea class="input" id="es_base" rows="5">${escapeHtml(soup.base || '')}</textarea></div>
+        <div class="field"><label>主持人手册<span class="field-hint">特殊玩法指令（撒谎策略/回答格式/触发语句等），AI 必须遵守</span></label><textarea class="input" id="es_host_manual" rows="5" placeholder="如：伪人/隐藏主持人玩法、规则触发条件、回答格式约束等">${escapeHtml(soup.host_manual || '')}</textarea></div>
+        <div class="field"><label>其他内容<span class="field-hint">故事梗概/怪谈解析/隐藏规则/收容物设定等补充内容，仅用于 AI 理解全貌</span></label><textarea class="input" id="es_extra" rows="4" placeholder="如：故事梗概、怪谈解析、隐藏规则等">${escapeHtml(soup.extra || '')}</textarea></div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="closeModal(event)">取消</button>
@@ -1387,6 +1427,8 @@ window.adminSoupSave = async (id) => {
     filename: $("#es_filename").value.trim(),
     surface: $("#es_surface").value,
     base: $("#es_base").value,
+    host_manual: $("#es_host_manual").value,
+    extra: $("#es_extra").value,
   };
   if (!body.title || !body.surface || !body.base) { toast("标题、汤面、汤底不能为空", "err"); return; }
   const { ok, data } = id
@@ -1411,6 +1453,14 @@ window.adminSoupsImport = async () => {
   const { ok, data } = await AdminAPI.post("/api/admin/soups/import", {});
   if (!ok) { toast(data.error || "导入失败", "err"); return; }
   toast(data.msg || "导入完成", "ok");
+  adminSoups();
+};
+
+window.adminSoupsReimport = async () => {
+  if (!confirm("用最新解析规则重新解析所有汤？\n这会刷新标题/汤面/汤底/主持人手册/其他内容字段（不会删除汤，也不会改动文件名）。")) return;
+  const { ok, data } = await AdminAPI.post("/api/admin/soups/reimport", {});
+  if (!ok) { toast(data.error || "重新解析失败", "err"); return; }
+  toast(data.msg || "已重新解析", "ok");
   adminSoups();
 };
 

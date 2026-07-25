@@ -165,8 +165,8 @@ function rooms_ai_question(string $code) {
     // 保存问题
     $q_msg = save_message($r['id'], $user, 'ai_question', $content);
 
-    // 取汤
-    $stmt = $pdo->prepare('SELECT surface, base FROM soups WHERE id = ?');
+    // 取汤（含主持人手册/其他内容）
+    $stmt = $pdo->prepare('SELECT surface, base, host_manual, extra FROM soups WHERE id = ?');
     $stmt->execute([$r['soup_id']]);
     $soup = $stmt->fetch();
     if (!$soup || empty($soup['base'])) {
@@ -179,7 +179,14 @@ function rooms_ai_question(string $code) {
     }
 
     try {
-        $answer = ask_ai($soup['surface'] ?: '', $soup['base'], $content, $api_key);
+        $answer = ask_ai(
+            $soup['surface'] ?: '',
+            $soup['base'],
+            $content,
+            $api_key,
+            $soup['host_manual'] ?? '',
+            $soup['extra'] ?? ''
+        );
     } catch (AIError $e) {
         json_ok([
             'question' => message_to_dict($q_msg),
