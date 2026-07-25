@@ -160,7 +160,13 @@ function route_api(string $path) {
     csrf_token();
 
     // CSRF 校验：豁免登录前接口（注册暂未开放，但保留豁免）
-    csrf_check(['auth/login', 'auth/send-code', 'auth/register']);
+    // Admin API Token 请求（X-Admin-Token）也豁免 CSRF，便于脚本/Agent 调用
+    $exemptCsrf = ['auth/login', 'auth/send-code', 'auth/register'];
+    if (admin_token_user() !== null) {
+        // 所有 admin token 请求都豁免 CSRF
+    } else {
+        csrf_check($exemptCsrf);
+    }
 
     // 首次访问自动导入汤
     try {

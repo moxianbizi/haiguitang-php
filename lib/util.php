@@ -29,7 +29,35 @@ function current_user() {
     return $u ?: null;
 }
 
+/**
+ * 检查是否通过 Admin API Token 鉴权（X-Admin-Token 头）。
+ * 用于脚本/Agent 免登录调用后台接口，绕过 session 与 CSRF。
+ * @return array|null 返回虚拟管理员用户数组，或 null（未使用 token 鉴权）
+ */
+function admin_token_user(): ?array {
+    static $cached = null;
+    static $checked = false;
+    if ($checked) return $cached;
+    $checked = true;
+    $token = Config::$ADMIN_API_TOKEN ?? '';
+    if ($token === '') return null;
+    $given = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? ($_GET['admin_token'] ?? '');
+    if ($given === '' || !hash_equals($token, $given)) return null;
+    $cached = [
+        'id' => 0,
+        'username' => 'admin-api-token',
+        'email' => '',
+        'is_admin' => 1,
+        'is_banned' => 0,
+        'banned_reason' => '',
+    ];
+    return $cached;
+}
+
 function require_login() {
+    // 优先检查 Admin API Token
+    $tokenUser = admin_token_user();
+    if ($tokenUser) return $tokenUser;
     $u = current_user();
     if (!$u) json_error('请先登录', 401);
     if ((int)$u['is_banned'] === 1) json_error('账号已被封禁：' . ($u['banned_reason'] ?: '无'), 403);
@@ -37,6 +65,9 @@ function require_login() {
 }
 
 function require_admin() {
+    // 优先检查 Admin API Token
+    $tokenUser = admin_token_user();
+    if ($tokenUser) return $tokenUser;
     $u = require_login();
     if ((int)$u['is_admin'] !== 1) json_error('需要管理员权限', 403);
     return $u;

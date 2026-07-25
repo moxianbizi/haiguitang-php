@@ -13,6 +13,7 @@ function handle_admin(array $segments) {
     elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
     elseif ($action === 'soups' && $segments[2] === 'import' && $method === 'POST') admin_soups_import();
     elseif ($action === 'soups' && $segments[2] === 'reimport' && $method === 'POST') admin_soups_reimport();
+    elseif ($action === 'soups' && $segments[2] === 'rebuild' && $method === 'POST') admin_soups_rebuild();
     elseif ($action === 'soups' && $segments[2] === 'broken' && $method === 'GET') admin_soups_broken();
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'PUT') admin_soups_update((int)$segments[2]);
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
@@ -236,22 +237,20 @@ function admin_soups_list() {
     $sql = 'FROM soups WHERE 1=1';
     $params = [];
     if ($q !== '') {
-        $sql .= ' AND (title LIKE ? OR season LIKE ? OR filename LIKE ?)';
-        $params[] = "%$q%";
-        $params[] = "%$q%";
-        $params[] = "%$q%";
+        // 搜索范围扩展到：标题/系列/文件名/汤面/汤底/主持人手册/其他内容
+        $sql .= ' AND (title LIKE ? OR season LIKE ? OR filename LIKE ? OR surface LIKE ? OR base LIKE ? OR host_manual LIKE ? OR extra LIKE ?)';
+        $like = "%$q%";
+        $params[] = $like; $params[] = $like; $params[] = $like;
+        $params[] = $like; $params[] = $like; $params[] = $like; $params[] = $like;
     }
     $stmt = $pdo->prepare("SELECT COUNT(*) $sql");
     $stmt->execute($params);
     $total = (int)$stmt->fetchColumn();
 
-    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT :offset, :limit");
-    $stmt->bindValue(':offset', ($page - 1) * $perPage, PDO::PARAM_INT);
-    $stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
-    foreach ($params as $i => $p) {
-        $stmt->bindValue($i + 3, $p);
-    }
-    $stmt->execute();
+    $offset = ($page - 1) * $perPage;
+    $limit = $perPage;
+    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT $offset, $limit");
+    $stmt->execute($params);
     $soups = $stmt->fetchAll();
 
     json_ok([
@@ -387,6 +386,57 @@ function admin_soups_reimport() {
     if (!empty($result['skipped']))  $parts[] = "跳过 {$result['skipped']} 碗";
     if (!empty($result['error']))    $parts[] = "错误：{$result['error']}";
     $msg = $parts ? implode('，', $parts) : '无变更';
+    json_ok(['msg' => $msg] + $result);
+}
+
+/**
+ * 强制重建：删除数据库中所有汤，再从源目录全量重新导入。
+ * 比 reimport 更彻底，用于换汤源后彻底清理旧数据。
+ */
+function admin_soups_rebuild() {
+    $pdo = DB::pdo();
+    $dir = Config::$SOUPS_DIR;
+    if (!is_dir($dir)) {
+        $alt = __DIR__ . '/../data/soups';
+        if (is_dir($alt)) $dir = $alt;
+        else json_error('汤源目录不存在');
+    }
+
+    require_once __DIR__ . '/../lib/md.php';
+    $files = array_filter(scandir($dir), fn($f) => str_ends_with($f, '.md'));
+    sort($files, SORT_NATURAL | SORT_FLAG_CASE);
+
+    $before = (int)$pdo->query('SELECT COUNT(*) FROM soups')->fetchColumn();
+
+    $pdo->beginTransaction();
+    // 清空所有汤（rooms 表的 soup_id 是 nullable，不会因外键报错）
+    $pdo->exec('DELETE FROM soups');
+    // 重置自增 ID，让新导入的汤从 1 开始
+    $pdo->exec("DELETE FROM sqlite_sequence WHERE name='soups'");
+
+    $insStmt = $pdo->prepare('INSERT INTO soups (filename, season, episode, title, surface, base, host_manual, extra, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)');
+    $imported = 0;
+    $errors = [];
+    foreach ($files as $f) {
+        $content = @file_get_contents($dir . '/' . $f);
+        if ($content === false) { $errors[] = "$f 读取失败"; continue; }
+        $p = parse_md($f, $content);
+        $insStmt->execute([$p['filename'], $p['season'], $p['episode'], $p['title'], $p['surface'], $p['base'], $p['host_manual'], $p['extra']]);
+        $imported++;
+    }
+    $pdo->commit();
+
+    $after = (int)$pdo->query('SELECT COUNT(*) FROM soups')->fetchColumn();
+    $result = [
+        'before'   => $before,
+        'after'    => $after,
+        'imported' => $imported,
+        'deleted'  => $before,
+        'errors'   => $errors,
+    ];
+    log_admin_action('soup_rebuild', '', json_encode($result, JSON_UNESCAPED_UNICODE));
+    $msg = "强制重建完成：删除旧汤 {$before} 碗，导入新汤 {$imported} 碗";
+    if ($errors) $msg .= '，错误：' . implode('；', $errors);
     json_ok(['msg' => $msg] + $result);
 }
 

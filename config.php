@@ -39,6 +39,9 @@ class Config {
     /** 运维工具 Token（留空则只用管理员 session，设置后支持 ?token=xxx 免登录访问 tool.php） */
     public static $TOOL_TOKEN = '';
 
+    /** 后台 API Token（留空则只能用管理员 session；设置后可用 X-Admin-Token 头免登录调用 /api/admin/*） */
+    public static $ADMIN_API_TOKEN = '';
+
     /** Session 超时（秒，0 表示不限制；默认 30 天，与 cookie lifetime 一致） */
     public static $SESSION_TIMEOUT = 2592000;
 
@@ -58,6 +61,8 @@ class Config {
         self::$MAIL_SMTP_USER = $env('MAIL_SMTP_USER', self::$MAIL_SMTP_USER);
         self::$MAIL_SMTP_PASS = $env('MAIL_SMTP_PASS', self::$MAIL_SMTP_PASS);
         self::$MAIL_FROM = $env('MAIL_FROM', self::$MAIL_FROM);
+        self::$TOOL_TOKEN = $env('TOOL_TOKEN', self::$TOOL_TOKEN);
+        self::$ADMIN_API_TOKEN = $env('ADMIN_API_TOKEN', self::$ADMIN_API_TOKEN);
 
         if (self::$SECRET_KEY === '') {
             self::$SECRET_KEY = bin2hex(random_bytes(32));

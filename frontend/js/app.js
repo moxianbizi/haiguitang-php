@@ -1369,11 +1369,12 @@ async function adminSoups(page = 1) {
       <div class="admin-toolbar">
         <h2 class="admin-title">🍲 汤管理</h2>
         <div class="admin-toolbar-right">
-          <input class="input admin-search" id="adminSearch" placeholder="搜索标题/系列/文件名…" value="${escapeHtml(q)}" onkeydown="if(event.key==='Enter')adminSoups(1)" />
+          <input class="input admin-search" id="adminSearch" placeholder="搜索标题/系列/文件名/汤面/汤底…" value="${escapeHtml(q)}" oninput="adminSoupsSearchDebounced()" onkeydown="if(event.key==='Enter')adminSoups(1)" />
           <button class="btn btn-primary admin-btn-sm" onclick="adminSoups(1)">搜索</button>
           <button class="btn btn-secondary admin-btn-sm" onclick="adminSoupEditModal()">+ 新建汤</button>
           <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsImport()">📁 批量导入</button>
-          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsReimport()" title="用最新解析规则重新解析所有汤（刷新主持人手册/其他内容字段）">🔄 重新解析</button>
+          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsReimport()" title="用最新解析规则重新解析所有汤（增量：更新已有/删除多余/导入新增）">🔄 重新解析</button>
+          <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsRebuild()" title="强制清空所有汤再全量重新导入（换汤源后用这个）">💥 强制重建</button>
           <button class="btn btn-ghost admin-btn-sm" onclick="adminSoupsBroken()" title="检测汤面/汤底为空或疑似内容混入的汤">🩺 坏汤检测</button>
         </div>
       </div>
@@ -1472,11 +1473,26 @@ window.adminSoupsImport = async () => {
 };
 
 window.adminSoupsReimport = async () => {
-  if (!confirm("用最新解析规则重新解析所有汤？\n这会刷新标题/汤面/汤底/主持人手册/其他内容字段（不会删除汤，也不会改动文件名）。")) return;
+  if (!confirm("用最新解析规则重新解析所有汤？\n增量模式：更新已有汤、删除源文件不存在的、导入新增的。")) return;
   const { ok, data } = await AdminAPI.post("/api/admin/soups/reimport", {});
   if (!ok) { toast(data.error || "重新解析失败", "err"); return; }
   toast(data.msg || "已重新解析", "ok");
   adminSoups();
+};
+
+window.adminSoupsRebuild = async () => {
+  if (!confirm("⚠️ 强制重建：删除数据库中所有汤，再从源目录全量重新导入。\n\n这会清空所有汤（包括手动新建的），确定继续？")) return;
+  const { ok, data } = await AdminAPI.post("/api/admin/soups/rebuild", {});
+  if (!ok) { toast(data.error || "强制重建失败", "err"); return; }
+  toast(data.msg || "强制重建完成", "ok");
+  adminSoups();
+};
+
+// 搜索防抖：输入时实时搜索（300ms 延迟）
+let _adminSoupsSearchTimer = null;
+window.adminSoupsSearchDebounced = () => {
+  clearTimeout(_adminSoupsSearchTimer);
+  _adminSoupsSearchTimer = setTimeout(() => adminSoups(1), 300);
 };
 
 window.adminSoupsBroken = async () => {
