@@ -12,17 +12,17 @@
  */
 
 /**
- * 红字规则自动标记：识别汤面末尾的「（注：2、4、6、8为红字规则，即反话）」说明，
- * 提取编号，把对应条目用 <em> 包裹（前端 em 渲染为红色规则）。
+ * 规则类汤面整理：识别汤面末尾的「（注：2、4、6、8为红字规则，即反话）」说明，
+ * 把规则条目按编号分行，并对命中红字编号的条目用 <em> 包裹（前端 em 渲染为红色规则）。
  *
  * 处理流程：
- * 1. 从汤面尾部匹配「（注：X、X、X为红字规则[，即...]）」格式的说明
- * 2. 提取红字编号集合（支持中文顿号、逗号分隔，如 "2、4、6、8" 或 "2,4,6,8"）
- * 3. 把汤面正文按「数字.」或「数字．」或「数字、」切分成条目
- * 4. 把命中的红字条目用 <em> 包裹，移除尾部的说明括号
+ * 1. 从汤面尾部匹配「X、X、X为红字规则[，即...]」说明，提取红字编号集合
+ * 2. 移除说明括号
+ * 3. 按「数字.」「数字．」「数字、」切分条目，每条独占一行（marked breaks:true 渲染为多行）
+ * 4. 命中红字编号的条目用 <em> 包裹
  *
  * @param string $surface 汤面原文
- * @return string 处理后的汤面（红字条目已包裹 <em>，说明括号已移除）
+ * @return string 处理后的汤面（条目已分行，红字条目已包裹 <em>，说明括号已移除）
  */
 function apply_red_rule_marker(string $surface): string {
     if ($surface === '') return $surface;
@@ -45,28 +45,24 @@ function apply_red_rule_marker(string $surface): string {
 
     // 按条目编号切分：支持「1.」「1．」「1、」三种分隔符
     // 用正则把每条拆出来：编号 + 内容（到下一个编号或字符串末尾）
-    // 编号后紧跟内容，内容里不含下一个编号
     $pattern = '/(\d+)[.．、]\s*([^ ]*?)(?=(?:\d+[.．、])|$)/u';
     if (!preg_match_all($pattern, $surface, $items, PREG_SET_ORDER)) {
         return $surface;
     }
 
-    // 重建汤面：遍历条目，命中红字编号的用 <em> 包裹
-    $result = $surface;
+    // 重建汤面：每条独占一行，命中红字编号的用 <em> 包裹
+    // （marked breaks:true 会把单换行转 <br>，实现分行显示）
+    $lines = [];
     foreach ($items as $item) {
         $num = $item[1];
-        $full = $item[0]; // 编号 + 内容
+        $full = trim($item[0]); // 编号 + 内容
         if (in_array($num, $redNumbers, true)) {
-            // 用 <em> 包裹整条（含编号），保留原分隔
-            $replacement = "<em>{$full}</em>";
-            // 只替换第一次出现（避免重复条目互相影响）
-            $pos = mb_strpos($result, $full);
-            if ($pos !== false) {
-                $result = mb_substr($result, 0, $pos) . $replacement . mb_substr($result, $pos + mb_strlen($full));
-            }
+            $lines[] = "<em>{$full}</em>";
+        } else {
+            $lines[] = $full;
         }
     }
-    return $result;
+    return implode("\n", $lines);
 }
 
 function parse_md(string $filename, string $content): array {
