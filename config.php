@@ -39,8 +39,8 @@ class Config {
     /** 运维工具 Token（留空则只用管理员 session，设置后支持 ?token=xxx 免登录访问 tool.php） */
     public static $TOOL_TOKEN = '';
 
-    /** Session 超时（秒，0 表示不限制） */
-    public static $SESSION_TIMEOUT = 86400;
+    /** Session 超时（秒，0 表示不限制；默认 30 天，与 cookie lifetime 一致） */
+    public static $SESSION_TIMEOUT = 2592000;
 
     /** 初始化时从环境变量覆盖 */
     public static function load() {

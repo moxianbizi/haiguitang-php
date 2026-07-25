@@ -56,20 +56,36 @@ if (!extension_loaded('pdo_sqlite')) {
     exit;
 }
 
-// session 配置
+// session 配置：30 天持久化（关闭浏览器不丢登录）
+$__cookieLifetime = 30 * 86400;
 ini_set('session.cookie_httponly', 1);
 ini_set('session.cookie_samesite', 'Lax');
+ini_set('session.cookie_lifetime', $__cookieLifetime);
+ini_set('session.gc_maxlifetime', $__cookieLifetime);
 if (!empty($_SERVER['HTTPS'])) {
     ini_set('session.cookie_secure', 1);
 }
 session_name('hgt_sid');
 session_start();
+// 已有会话但 cookie 即将过期时刷新 lifetime（滑动过期）
+if (!empty($_SESSION['user_id'])) {
+    setcookie(session_name(), session_id(), [
+        'expires'  => time() + $__cookieLifetime,
+        'path'     => '/',
+        'httponly' => true,
+        'samesite' => 'Lax',
+        'secure'   => !empty($_SERVER['HTTPS']),
+    ]);
+}
 
-// Session 超时检查
+// Session 超时检查（滑动过期：每次活跃都顺延）
 if (Config::$SESSION_TIMEOUT > 0 && !empty($_SESSION['login_time'])) {
     if (time() - $_SESSION['login_time'] > Config::$SESSION_TIMEOUT) {
         $_SESSION = [];
         session_destroy();
+    } else {
+        // 活跃即顺延
+        $_SESSION['login_time'] = time();
     }
 }
 
