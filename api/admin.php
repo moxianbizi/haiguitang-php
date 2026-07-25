@@ -9,12 +9,13 @@ function handle_admin(array $segments) {
     if ($action === 'stats' && $method === 'GET') admin_stats();
     elseif ($action === 'users' && $method === 'GET') admin_users_list();
     elseif ($action === 'users' && $method === 'POST') admin_users_create();
+    elseif ($action === 'soups' && $method === 'GET' && $segments[2] === 'broken') admin_soups_broken();
     elseif ($action === 'soups' && $method === 'GET') admin_soups_list();
-    elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
+    // 带子路径的 POST 必须放在通用 soups POST 之前，否则会被 admin_soups_create 抢先匹配
     elseif ($action === 'soups' && $segments[2] === 'import' && $method === 'POST') admin_soups_import();
     elseif ($action === 'soups' && $segments[2] === 'reimport' && $method === 'POST') admin_soups_reimport();
     elseif ($action === 'soups' && $segments[2] === 'rebuild' && $method === 'POST') admin_soups_rebuild();
-    elseif ($action === 'soups' && $segments[2] === 'broken' && $method === 'GET') admin_soups_broken();
+    elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'PUT') admin_soups_update((int)$segments[2]);
     elseif ($action === 'soups' && isset($segments[2]) && ctype_digit($segments[2]) && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
     elseif ($action === 'rooms' && $method === 'GET') admin_rooms_list();

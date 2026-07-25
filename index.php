@@ -149,12 +149,24 @@ serve_static($uri);
 // ===================== API 路由 =====================
 function route_api(string $path) {
     $segments = explode('/', trim($path, '/'));
-    $module = $segments[0] ?? '';
+
+    // 兜底：某些 nginx 反代/PHP-FPM 配置下 $_GET 可能为空，
+    // 从 REQUEST_URI 自己解析 query string 补全 $_GET。
+    if (empty($_GET) && isset($_SERVER['REQUEST_URI'])) {
+        $qPos = strpos($_SERVER['REQUEST_URI'], '?');
+        if ($qPos !== false) {
+            $qs = substr($_SERVER['REQUEST_URI'], $qPos + 1);
+            parse_str($qs, $parsed);
+            if (is_array($parsed)) $_GET = array_merge($_GET, $parsed);
+        }
+    }
 
     require_once __DIR__ . '/db.php';
     require_once __DIR__ . '/lib/util.php';
     require_once __DIR__ . '/lib/mail.php';
     require_once __DIR__ . '/lib/ai.php';
+
+    $module = $segments[0] ?? '';
 
     // 初始化 CSRF token（确保 session 里有 token）
     csrf_token();
