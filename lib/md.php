@@ -26,6 +26,9 @@ function parse_md(string $filename, string $content): array {
             // 颜色版第一行就是标题（如 "S3E16《白雪公主规则怪谈》"）
             $title = $t;
         }
+        // 剥离所有 HTML 标签（标题在前端按纯文本展示，
+        // 颜色版可能用 <span style="color: blue;"> 包裹标题行，如 S3E41）
+        $title = strip_tags($title);
         // 去掉书名号
         $title = preg_replace('/^《(.+)》$/', '$1', $title);
         // 去掉首尾的 ** 加粗标记（如 "**S3E42《教室》**" → "S3E42《教室》"）
@@ -72,7 +75,12 @@ function parse_md(string $filename, string $content): array {
 
         // 尝试匹配段落起始标记
         $matched = false;
-        // 先剥离行首的 <span ...> 标签（颜色版可能用蓝色 span 包裹标记）
+        // 先剥离行首的 <span ...> 标签（颜色版可能用蓝色 span 包裹标记，
+        // 如 S3E41：<span style="color: blue;">汤面 第一天...</span>必须...）
+        $spanOpen = '';
+        if (preg_match('/^<span[^>]*>/u', $trimmed, $sm)) {
+            $spanOpen = $sm[0];
+        }
         $stripped = preg_replace('/^<span[^>]*>\s*/u', '', $trimmed);
         foreach ($markers as $key => $pattern) {
             if (preg_match($pattern, $stripped)) {
@@ -81,13 +89,10 @@ function parse_md(string $filename, string $content): array {
                 $rest = preg_replace($pattern, '', $stripped);
                 // 用正则去掉行首的标点/空白（ltrim 按 byte 处理，会破坏以 e3 80 开头的多字节字符如《）
                 $rest = preg_replace('/^[\s：:）)*　]+/u', '', $rest);
-                // 若剥离了 span 标签，且行尾有 </span>，保留 span 结构用于颜色渲染
-                if ($rest !== '' && $stripped !== $trimmed) {
-                    // 行首有 span 标签，把 span 重新加上（保持颜色）
-                    $rest = preg_replace('/^<span[^>]*>/u', '', $trimmed) ;
-                    // 去掉标记部分
-                    $rest = preg_replace($pattern, '', $rest, 1);
-                    $rest = preg_replace('/^[\s：:）)*　]+/u', '', $rest);
+                // 若原行首有 <span> 标签，把开标签加回去，保留完整的 span 结构用于颜色渲染
+                // （span 可能只包裹标记行的一部分，中间有 </span> 闭合，需保留原结构）
+                if ($rest !== '' && $spanOpen !== '') {
+                    $rest = $spanOpen . $rest;
                 }
                 if ($rest !== '') $sections[$key][] = $rest;
                 $matched = true;
