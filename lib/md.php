@@ -49,6 +49,14 @@ function apply_red_rule_marker(string $surface): string {
         return $surface;
     }
 
+    // 安全护栏：若汤面含 ** 加粗或 | 表格语法，直接拆行会破坏 marked 的跨块闭合
+    // （如「**通关条件：1. …；2. …；3. …**」单行被拆成多行后，** 跨段落/列表无法闭合，
+    //   渲染出字面 **；表格单元格被拆成多行会破坏表格结构）。
+    // 此时放弃分行与 <em> 红字标记，保留原文（红字说明已在上面移除）。
+    if (str_contains($surface, '**') || str_contains($surface, '|')) {
+        return $surface;
+    }
+
     // 按编号位置切分成条目：每条 = 该编号到下一个编号之间的内容
     $items = [];
     $positions = $matches[0];

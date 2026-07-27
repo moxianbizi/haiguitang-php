@@ -56,7 +56,13 @@ function renderMd(md) {
   }
   let html;
   if (typeof marked !== "undefined") {
-    html = marked.parse(String(md ?? ""));
+    let src = String(md ?? "");
+    // 预处理：marked v12 严格遵循 CommonMark，CJK 字符相邻的 **bold** 无法识别
+    // （如「**【渡边温泉】**编号」「**老板娘视角 **」会渲染出字面 **）。
+    // 这里把单行内、不含 * 的 **content** 提前转成 <strong>，marked 见到 HTML 标签会原样保留。
+    // 不处理跨行 **（content 含换行），交给 marked 正常解析。
+    src = src.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    html = marked.parse(src);
     if (typeof DOMPurify !== "undefined") {
       html = DOMPurify.sanitize(html, {
         ALLOWED_TAGS: [

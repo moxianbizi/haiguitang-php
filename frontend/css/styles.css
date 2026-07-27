@@ -334,6 +334,7 @@ input, textarea {
   gap: 8px;
   overflow-x: auto;
   padding: 8px 0 28px;
+  margin-top: 24px;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
