@@ -41,7 +41,7 @@ function admin_token_user(): ?array {
     $checked = true;
     $token = Config::$ADMIN_API_TOKEN ?? '';
     if ($token === '') return null;
-    $given = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? ($_GET['admin_token'] ?? '');
+    $given = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '';
     if ($given === '' || !hash_equals($token, $given)) return null;
     $cached = [
         'id' => 0,
@@ -185,6 +185,67 @@ function csrf_check(array $exempt = []): void {
     $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['_csrf'] ?? '');
     if ($token === '' || !hash_equals($expected, $token)) {
         json_error('CSRF 校验失败，请刷新页面重试', 403);
+    }
+}
+
+function check_soup_owner(array $soup, array $user): void {
+    if ((int)$user['is_admin'] === 1) return;
+    if ((int)$user['id'] === (int)$soup['author_id']) return;
+    json_error('无权操作此汤', 403);
+}
+
+function is_room_member(array $room, array $user): bool {
+    if ((int)$user['id'] === (int)$room['host_id']) return true;
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT 1 FROM messages WHERE room_id = ? AND user_id = ? LIMIT 1');
+    $stmt->execute([$room['id'], $user['id']]);
+    return (bool)$stmt->fetch();
+}
+
+function rate_limit(string $key, int $max, int $window = 60): bool {
+    try {
+        $pdo = DB::pdo();
+        $now = time();
+        // BEGIN IMMEDIATE 立即获取写锁，串行化并发避免竞态
+        $pdo->exec('BEGIN IMMEDIATE');
+        $stmt = $pdo->prepare('SELECT value FROM settings WHERE key = ?');
+        $stmt->execute([$key]);
+        $row = $stmt->fetch();
+        if ($row) {
+            $data = json_decode($row['value'], true);
+            if (is_array($data) && isset($data['count'], $data['window_start'])) {
+                if ($now - (int)$data['window_start'] > $window) {
+                    $data = ['count' => 1, 'window_start' => $now];
+                } else {
+                    $data['count']++;
+                }
+            } else {
+                $data = ['count' => 1, 'window_start' => $now];
+            }
+        } else {
+            $data = ['count' => 1, 'window_start' => $now];
+        }
+        $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
+        $stmt->execute([$key, json_encode($data)]);
+        $pdo->exec('COMMIT');
+        return $data['count'] <= $max;
+    } catch (Throwable $e) {
+        // 失败时回滚事务（防止锁残留），限频放行避免影响正常用户
+        try { $pdo->exec('ROLLBACK'); } catch (Throwable $ee) {}
+        return true;
+    }
+}
+
+function cleanup_rate_limits(): void {
+    try {
+        $pdo = DB::pdo();
+        $prefixes = ['ai_ask_', 'room_create_', 'msg_room_', 'login_attempts_'];
+        foreach ($prefixes as $prefix) {
+            $stmt = $pdo->prepare("DELETE FROM settings WHERE key LIKE ? AND updated_at < datetime('now', '-1 hour')");
+            $stmt->execute([$prefix . '%']);
+        }
+    } catch (Throwable $e) {
+        // ignore
     }
 }
 

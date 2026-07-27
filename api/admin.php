@@ -16,7 +16,11 @@ function handle_admin(array $segments) {
     $seg3 = $segments[3] ?? '';
     $hasSeg2 = isset($segments[2]) && ctype_digit($segments[2]);
 
-    if ($action === 'stats' && $method === 'GET') admin_stats();
+    if ($action === 'stats' && $method === 'GET' && $seg2 === 'trends') admin_stats_trends();
+    elseif ($action === 'stats' && $method === 'GET' && $seg2 === 'ai-usage') admin_stats_ai_usage();
+    elseif ($action === 'stats' && $method === 'GET' && $seg2 === 'retention') admin_stats_retention();
+    elseif ($action === 'stats' && $method === 'GET' && $seg2 === 'rooms') admin_stats_rooms_trends();
+    elseif ($action === 'stats' && $method === 'GET') admin_stats();
     elseif ($action === 'users' && $method === 'GET') admin_users_list();
     elseif ($action === 'users' && $method === 'POST') admin_users_create();
     elseif ($action === 'soups' && $method === 'GET' && $seg2 === 'broken') admin_soups_broken();
@@ -27,6 +31,8 @@ function handle_admin(array $segments) {
     elseif ($action === 'soups' && $seg2 === 'rebuild' && $method === 'POST') admin_soups_rebuild();
     elseif ($action === 'soups' && $method === 'POST') admin_soups_create();
     elseif ($action === 'soups' && $hasSeg2 && $method === 'PUT') admin_soups_update((int)$segments[2]);
+    elseif ($action === 'soups' && $hasSeg2 && $seg3 === 'approve' && $method === 'POST') admin_soups_approve((int)$segments[2]);
+    elseif ($action === 'soups' && $hasSeg2 && $seg3 === 'reject' && $method === 'POST') admin_soups_reject((int)$segments[2]);
     elseif ($action === 'soups' && $hasSeg2 && $method === 'DELETE') admin_soups_delete((int)$segments[2]);
     elseif ($action === 'rooms' && $method === 'GET') admin_rooms_list();
     elseif ($action === 'rooms' && $hasSeg2 && $method === 'DELETE') admin_rooms_delete((int)$segments[2]);
@@ -58,9 +64,15 @@ function admin_stats() {
     $rooms_ended = (int)$pdo->query("SELECT COUNT(*) FROM rooms WHERE status = 'ended'")->fetchColumn();
     $messages_total = (int)$pdo->query('SELECT COUNT(*) FROM messages')->fetchColumn();
     $today = date('Y-m-d');
-    $new_users_today = (int)$pdo->query("SELECT COUNT(*) FROM users WHERE created_at >= '{$today}'")->fetchColumn();
-    $new_rooms_today = (int)$pdo->query("SELECT COUNT(*) FROM rooms WHERE created_at >= '{$today}'")->fetchColumn();
-    $messages_today = (int)$pdo->query("SELECT COUNT(*) FROM messages WHERE created_at >= '{$today}'")->fetchColumn();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE created_at >= ?');
+    $stmt->execute([$today]);
+    $new_users_today = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM rooms WHERE created_at >= ?');
+    $stmt->execute([$today]);
+    $new_rooms_today = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM messages WHERE created_at >= ?');
+    $stmt->execute([$today]);
+    $messages_today = (int)$stmt->fetchColumn();
 
     // 最近 7 天趋势
     $trend = $pdo->query("SELECT date(created_at) AS d, COUNT(*) AS c FROM users GROUP BY date(created_at) ORDER BY d DESC LIMIT 7")->fetchAll();
@@ -262,7 +274,9 @@ function admin_soups_list() {
 
     $offset = ($page - 1) * $perPage;
     $limit = $perPage;
-    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT $offset, $limit");
+    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT :offset, :limit");
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
     $stmt->execute($params);
     $soups = $stmt->fetchAll();
 
@@ -286,6 +300,13 @@ function admin_soups_create() {
     $episode = trim($data['episode'] ?? '');
     $filename = trim($data['filename'] ?? '');
     if ($title === '' || $surface === '' || $base === '') json_error('标题、汤面、汤底不能为空');
+    validate_length($title, 200, '标题');
+    validate_length($surface, 50000, '汤面');
+    validate_length($base, 50000, '汤底');
+    validate_length($hostManual, 50000, '主持人手册');
+    validate_length($extra, 50000, '其他内容');
+    validate_length($season, 50, '系列');
+    validate_length($episode, 50, '集数');
 
     if ($filename === '') {
         $baseName = $season ? "{$season}{$episode}_{$title}" : $title;
@@ -343,6 +364,38 @@ function admin_soups_update(int $id) {
     json_ok(['msg' => '已更新']);
 }
 
+function admin_soups_approve(int $id) {
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT title, status FROM soups WHERE id = ?');
+    $stmt->execute([$id]);
+    $s = $stmt->fetch();
+    if (!$s) json_error('未找到', 404);
+    if ($s['status'] === 'approved') json_error('该汤已通过审核');
+
+    $stmt = $pdo->prepare('UPDATE soups SET status = \'approved\', reject_reason = NULL WHERE id = ?');
+    $stmt->execute([$id]);
+    log_admin_action('soup_approve', "soup #$id", $s['title']);
+    json_ok(['msg' => '审核通过']);
+}
+
+function admin_soups_reject(int $id) {
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT title, status FROM soups WHERE id = ?');
+    $stmt->execute([$id]);
+    $s = $stmt->fetch();
+    if (!$s) json_error('未找到', 404);
+    if ($s['status'] === 'rejected') json_error('该汤已被拒绝');
+
+    $data = body_json();
+    $reason = trim($data['reason'] ?? '');
+    if ($reason === '') json_error('请填写拒绝原因');
+
+    $stmt = $pdo->prepare('UPDATE soups SET status = \'rejected\', reject_reason = ? WHERE id = ?');
+    $stmt->execute([$reason, $id]);
+    log_admin_action('soup_reject', "soup #$id", ($s['title'] ?? '') . " - $reason");
+    json_ok(['msg' => '已拒绝']);
+}
+
 function admin_soups_delete(int $id) {
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT filename, title FROM soups WHERE id = ?');
@@ -356,6 +409,9 @@ function admin_soups_delete(int $id) {
         @unlink($filePath);
     }
 
+    // 先解除 rooms 引用（避免外键约束失败）；comments 走 ON DELETE CASCADE
+    $stmt = $pdo->prepare('UPDATE rooms SET soup_id = NULL WHERE soup_id = ?');
+    $stmt->execute([$id]);
     $stmt = $pdo->prepare('DELETE FROM soups WHERE id = ?');
     $stmt->execute([$id]);
     log_admin_action('soup_delete', "soup #$id", $s['title']);
@@ -422,7 +478,10 @@ function admin_soups_rebuild() {
     $before = (int)$pdo->query('SELECT COUNT(*) FROM soups')->fetchColumn();
 
     $pdo->beginTransaction();
-    // 清空所有汤（rooms 表的 soup_id 是 nullable，不会因外键报错）
+    // 先解除 rooms 对 soups 的引用、清理评论（避免外键约束失败）
+    $pdo->exec('UPDATE rooms SET soup_id = NULL');
+    $pdo->exec('DELETE FROM comments');
+    // 清空所有汤
     $pdo->exec('DELETE FROM soups');
     // 重置自增 ID，让新导入的汤从 1 开始
     $pdo->exec("DELETE FROM sqlite_sequence WHERE name='soups'");
@@ -635,7 +694,9 @@ function admin_logs() {
 
     $total = (int)$pdo->query('SELECT COUNT(*) FROM admin_logs')->fetchColumn();
     $stmt = $pdo->prepare('SELECT * FROM admin_logs ORDER BY id DESC LIMIT ? OFFSET ?');
-    $stmt->execute([$perPage, $offset]);
+    $stmt->bindValue(1, $perPage, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
     $logs = $stmt->fetchAll();
 
     json_ok([
@@ -762,7 +823,11 @@ function admin_git_pull() {
     if ($before === $after) {
         $output .= "\n\nℹ️ HEAD 未变化（本地已是最新，或 pull 失败）";
     } else {
-        [$cnt,] = admin_run_shell("git rev-list {$before}..{$after} --count");
+        if (preg_match('/^[0-9a-f]{40}$/', $before) && preg_match('/^[0-9a-f]{40}$/', $after)) {
+            [$cnt,] = admin_run_shell("git rev-list " . escapeshellarg($before) . ".." . escapeshellarg($after) . " --count");
+        } else {
+            $cnt = '?';
+        }
         $cnt = trim($cnt);
         $output .= "\n\n✅ 已更新到新版本，新增 $cnt 个提交";
     }
@@ -790,4 +855,58 @@ function admin_reset_opcache() {
         json_ok(['msg' => 'OPcache 已重置']);
     }
     json_error('OPcache 未启用');
+}
+
+function admin_stats_trends() {
+    $pdo = DB::pdo();
+    $days = min(90, max(7, (int)($_GET['days'] ?? 30)));
+    $rows = $pdo->prepare("SELECT date(created_at) AS d, COUNT(*) AS c FROM soups WHERE created_at >= date('now', '-' || :days || ' days') GROUP BY date(created_at) ORDER BY d");
+    $rows->execute(['days' => $days]);
+    $soups = $rows->fetchAll();
+    $rows2 = $pdo->prepare("SELECT date(created_at) AS d, COUNT(*) AS c FROM rooms WHERE created_at >= date('now', '-' || :days || ' days') GROUP BY date(created_at) ORDER BY d");
+    $rows2->execute(['days' => $days]);
+    $rooms = $rows2->fetchAll();
+    $rows3 = $pdo->prepare("SELECT date(created_at) AS d, COUNT(*) AS c FROM users WHERE created_at >= date('now', '-' || :days || ' days') GROUP BY date(created_at) ORDER BY d");
+    $rows3->execute(['days' => $days]);
+    $users = $rows3->fetchAll();
+    $topSoups = $pdo->query('SELECT id, title, view_count FROM soups ORDER BY view_count DESC LIMIT 10')->fetchAll();
+    json_ok(['soups' => $soups, 'rooms' => $rooms, 'users' => $users, 'top_soups' => $topSoups]);
+}
+
+function admin_stats_ai_usage() {
+    $pdo = DB::pdo();
+    $days = min(90, max(7, (int)($_GET['days'] ?? 30)));
+    $rows = $pdo->prepare("SELECT date(created_at) AS d, COUNT(*) AS c FROM messages WHERE msg_type IN ('ai_question','ai_answer') AND created_at >= date('now', '-' || :days || ' days') GROUP BY date(created_at) ORDER BY d");
+    $rows->execute(['days' => $days]);
+    $daily = $rows->fetchAll();
+    $total = (int)$pdo->query("SELECT COUNT(*) FROM messages WHERE msg_type = 'ai_question'")->fetchColumn();
+    $roomAi = (int)$pdo->query("SELECT COUNT(*) FROM messages WHERE msg_type = 'ai_question' AND room_id IN (SELECT id FROM rooms WHERE ai_enabled = 1)")->fetchColumn();
+    json_ok(['daily' => $daily, 'total' => $total, 'room_ai' => $roomAi, 'single_ai' => $total - $roomAi]);
+}
+
+function admin_stats_retention() {
+    $pdo = DB::pdo();
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+    $today = date('Y-m-d');
+    $s = $pdo->prepare('SELECT COUNT(DISTINCT user_id) FROM messages WHERE date(created_at) = ?');
+    $s->execute([$today]);
+    $dau = (int)$s->fetchColumn();
+    $s2 = $pdo->prepare('SELECT COUNT(DISTINCT user_id) FROM messages WHERE created_at >= date(?, "-7 days")');
+    $s2->execute([$today]);
+    $wau = (int)$s2->fetchColumn();
+    $s3 = $pdo->prepare('SELECT COUNT(DISTINCT user_id) FROM messages WHERE created_at >= date(?, "-30 days")');
+    $s3->execute([$today]);
+    $mau = (int)$s3->fetchColumn();
+    json_ok(['total_users' => $total, 'dau' => $dau, 'wau' => $wau, 'mau' => $mau]);
+}
+
+function admin_stats_rooms_trends() {
+    $pdo = DB::pdo();
+    $days = min(90, max(7, (int)($_GET['days'] ?? 30)));
+    $rows = $pdo->prepare("SELECT date(created_at) AS d, COUNT(*) AS c FROM rooms WHERE created_at >= date('now', '-' || :days || ' days') GROUP BY date(created_at) ORDER BY d");
+    $rows->execute(['days' => $days]);
+    $daily = $rows->fetchAll();
+    $aiRooms = (int)$pdo->query("SELECT COUNT(*) FROM rooms WHERE ai_enabled = 1")->fetchColumn();
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM rooms')->fetchColumn();
+    json_ok(['daily' => $daily, 'total' => $total, 'ai_rooms' => $aiRooms, 'ai_ratio' => $total > 0 ? round($aiRooms / $total * 100, 1) : 0]);
 }

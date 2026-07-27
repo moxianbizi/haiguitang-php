@@ -20,17 +20,36 @@ echo "║        haiguitang-php                        ║"
 echo "╚══════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# ============ 配置（可修改） ============
+# ============ 配置（部署前请修改以下凭据！） ============
 INSTALL_DIR="/var/www/haiguitang"
 NGINX_CONF="/etc/nginx/conf.d/haiguitang.conf"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 DB_PATH="$INSTALL_DIR/data/haiguitang.db"
-ADMIN_USER="admin"
-ADMIN_PASS="mlp09876"
-ADMIN_EMAIL="admin@local"
+# ⚠️ 安全提示：请在部署前修改以下三个值，使用强密码与随机 token！
+# 可通过环境变量覆盖：DEPLOY_ADMIN_USER / DEPLOY_ADMIN_PASS / DEPLOY_ADMIN_EMAIL / DEPLOY_API_TOKEN
+ADMIN_USER="${DEPLOY_ADMIN_USER:-admin}"
+ADMIN_PASS="${DEPLOY_ADMIN_PASS:-PLEASE_CHANGE_ME}"
+ADMIN_EMAIL="${DEPLOY_ADMIN_EMAIL:-admin@example.com}"
 GIT_REPO="https://github.com/moxianbizi/haiguitang-php.git"
-API_TOKEN="k202607251359zjtbkx"
+# 生成随机 token（若环境变量未指定）
+API_TOKEN="${DEPLOY_API_TOKEN:-$(openssl rand -hex 24 2>/dev/null || echo PLEASE_CHANGE_ME)}"
 SECRET_KEY="hgt_auto_$(date +%s)_$(shuf -i 1000-9999 -n 1)"
+
+# ============ 凭据安全检查 ============
+check_credentials() {
+    if [ "$ADMIN_PASS" = "PLEASE_CHANGE_ME" ]; then
+        echo -e "${RED}错误：ADMIN_PASS 仍是默认占位值！${NC}"
+        echo -e "请通过环境变量指定强密码后重试，例如："
+        echo -e "  DEPLOY_ADMIN_PASS='你的强密码' DEPLOY_API_TOKEN='你的token' ./deploy.sh"
+        exit 1
+    fi
+    if [ "$API_TOKEN" = "PLEASE_CHANGE_ME" ]; then
+        echo -e "${RED}错误：API_TOKEN 仍是默认占位值（openssl 不可用）！${NC}"
+        echo -e "请通过环境变量指定：DEPLOY_API_TOKEN='你的token' ./deploy.sh"
+        exit 1
+    fi
+}
+check_credentials
 
 # ============ 检测系统 ============
 detect_os() {

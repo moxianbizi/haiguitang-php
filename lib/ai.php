@@ -154,10 +154,49 @@ class AIError extends Exception {
  * @param string      $extra      其他内容（隐藏规则/解析/碎片等，可选）
  * @return string AI 回答
  */
-function ask_ai(string $surface, string $base, string $question, string $api_key, string $hostManual = '', string $extra = ''): string {
+function ask_ai(string $surface, string $base, string $question, string $api_key, string $hostManual = '', string $extra = '', string $provider = 'deepseek', string $baseUrl = '', string $model = ''): string {
     $api_key = trim($api_key);
     if ($api_key === '') {
-        throw new AIError('未提供 DeepSeek API Key，请在页面设置中填写。', 'missing_key');
+        throw new AIError('未提供 API Key，请在页面设置中填写。', 'missing_key');
+    }
+
+    $provider = strtolower(trim($provider)) ?: 'deepseek';
+    if ($baseUrl === '') {
+        $baseUrl = Config::$DEEPSEEK_BASE_URL;
+    }
+    if ($model === '') {
+        $model = Config::$DEEPSEEK_MODEL;
+    }
+
+    // 防SSRF：禁止内网地址（含云元数据端点 169.254.169.254、CGNAT 100.64/10、IPv6 映射）
+    $parsed = parse_url($baseUrl);
+    $host = strtolower($parsed['host'] ?? '');
+    if ($host === '') {
+        throw new AIError('API 地址无效。', 'invalid_url');
+    }
+    // IPv6 [::1] / [::ffff:1.2.3.4] 形式
+    $hostNoBracket = trim($host, '[]');
+    if (preg_match('/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|localhost|::1|::ffff:|fe80:|fc|fd)/i', $hostNoBracket)) {
+        throw new AIError('不允许使用内网地址作为 API 地址。', 'ssrf_blocked');
+    }
+    // 进一步解析 IP（域名解析后判断，防止域名绕过）
+    $ip = gethostbyname($hostNoBracket);
+    if ($ip !== $hostNoBracket && filter_var($ip, FILTER_VALIDATE_IP)) {
+        $ipLong = ip2long($ip);
+        $blockedRanges = [
+            [ip2long('10.0.0.0'),     ip2long('10.255.255.255')],
+            [ip2long('172.16.0.0'),   ip2long('172.31.255.255')],
+            [ip2long('192.168.0.0'),  ip2long('192.168.255.255')],
+            [ip2long('127.0.0.0'),    ip2long('127.255.255.255')],
+            [ip2long('169.254.0.0'),  ip2long('169.254.255.255')],
+            [ip2long('100.64.0.0'),   ip2long('100.127.255.255')],
+            [ip2long('0.0.0.0'),      ip2long('0.255.255.255')],
+        ];
+        foreach ($blockedRanges as [$lo, $hi]) {
+            if ($ipLong !== false && $ipLong >= $lo && $ipLong <= $hi) {
+                throw new AIError('不允许使用内网地址作为 API 地址。', 'ssrf_blocked');
+            }
+        }
     }
 
     // 构造 user content：汤面/汤底必给，主持人手册/其他内容按需给
@@ -171,7 +210,7 @@ function ask_ai(string $surface, string $base, string $question, string $api_key
     $user_content .= "\n\n玩家提问：{$question}";
 
     $payload = [
-        'model' => Config::$DEEPSEEK_MODEL,
+        'model' => $model,
         'messages' => [
             ['role' => 'system', 'content' => AI_SYSTEM_PROMPT],
             ['role' => 'user', 'content' => $user_content],
@@ -182,7 +221,7 @@ function ask_ai(string $surface, string $base, string $question, string $api_key
         'temperature' => 0.3,
     ];
 
-    $ch = curl_init(Config::$DEEPSEEK_BASE_URL . '/chat/completions');
+    $ch = curl_init($baseUrl . '/chat/completions');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
@@ -208,10 +247,10 @@ function ask_ai(string $surface, string $base, string $question, string $api_key
     }
 
     if ($status === 401) {
-        throw new AIError('DeepSeek API Key 无效或已过期，请检查后重新填写。', 'invalid_key');
+        throw new AIError('API Key 无效或已过期，请检查后重新填写。', 'invalid_key');
     }
     if ($status === 402) {
-        throw new AIError('DeepSeek 账户余额不足。', 'insufficient_balance');
+        throw new AIError('账户余额不足。', 'insufficient_balance');
     }
     if ($status >= 400) {
         $detail = '';

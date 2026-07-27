@@ -96,6 +96,7 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 if (!empty($_SERVER['HTTPS'])) {
     header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
 }
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https:; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'");
 
 // CORS（同源通常不需要，部署到不同域名时打开）
 // header('Access-Control-Allow-Origin: *');
@@ -180,6 +181,11 @@ function route_api(string $path) {
         csrf_check($exemptCsrf);
     }
 
+    // 概率性清理过期的频率限制记录
+    if (mt_rand(1, 10000) <= (int)(Config::$RATE_LIMIT_CLEANUP_PROBABILITY * 10000)) {
+        cleanup_rate_limits();
+    }
+
     // 首次访问自动导入汤
     try {
         DB::import_soups_if_empty();
@@ -203,6 +209,10 @@ function route_api(string $path) {
         case 'ai':
             require_once __DIR__ . '/api/ai.php';
             handle_ai($segments);
+            break;
+        case 'follow':
+            require_once __DIR__ . '/api/follow.php';
+            handle_follow($segments);
             break;
         case 'admin':
             require_once __DIR__ . '/api/admin.php';

@@ -32,6 +32,8 @@ class DB {
             self::$pdo->exec('PRAGMA journal_mode = WAL');
             self::$pdo->exec('PRAGMA foreign_keys = ON');
             self::init_schema();
+            // 数据库初始化后从 settings 表加载持久化配置
+            Config::load_from_db();
         }
         return self::$pdo;
     }
@@ -113,6 +115,30 @@ class DB {
                 created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created_at);
+
+            CREATE TABLE IF NOT EXISTS comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                soup_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                deleted_at TEXT,
+                FOREIGN KEY (soup_id) REFERENCES soups(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_comments_soup ON comments(soup_id, id);
+
+            CREATE TABLE IF NOT EXISTS follows (
+                follower_id INTEGER NOT NULL,
+                following_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (follower_id, following_id),
+                FOREIGN KEY (follower_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (following_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
+            CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
         ");
 
         // 迁移：为旧数据库补列
@@ -125,6 +151,27 @@ class DB {
         $soupCols = $pdo->query('PRAGMA table_info(soups)')->fetchAll(PDO::FETCH_COLUMN, 1);
         if (!in_array('host_manual', $soupCols)) $pdo->exec('ALTER TABLE soups ADD COLUMN host_manual TEXT');
         if (!in_array('extra', $soupCols)) $pdo->exec('ALTER TABLE soups ADD COLUMN extra TEXT');
+
+        // 迁移：rooms 表补 ai_question_limit / member_limit / ai_question_count
+        $roomCols = $pdo->query('PRAGMA table_info(rooms)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('ai_question_limit', $roomCols)) $pdo->exec('ALTER TABLE rooms ADD COLUMN ai_question_limit INTEGER DEFAULT 0');
+        if (!in_array('member_limit', $roomCols)) $pdo->exec('ALTER TABLE rooms ADD COLUMN member_limit INTEGER DEFAULT 0');
+        if (!in_array('ai_question_count', $roomCols)) $pdo->exec('ALTER TABLE rooms ADD COLUMN ai_question_count INTEGER DEFAULT 0');
+
+        // 迁移：soups 表补 status / reject_reason
+        $soupCols2 = $pdo->query('PRAGMA table_info(soups)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('status', $soupCols2)) $pdo->exec("ALTER TABLE soups ADD COLUMN status TEXT DEFAULT 'approved'");
+        if (!in_array('reject_reason', $soupCols2)) $pdo->exec('ALTER TABLE soups ADD COLUMN reject_reason TEXT DEFAULT NULL');
+
+        // 迁移：soups 表补 images
+        $soupCols3 = $pdo->query('PRAGMA table_info(soups)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('images', $soupCols3)) $pdo->exec("ALTER TABLE soups ADD COLUMN images TEXT DEFAULT '[]'");
+
+        // 迁移：soups 表补 view_count / rooms 表补 ai_ask_count
+        $soupCols4 = $pdo->query('PRAGMA table_info(soups)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('view_count', $soupCols4)) $pdo->exec('ALTER TABLE soups ADD COLUMN view_count INTEGER DEFAULT 0');
+        $roomCols2 = $pdo->query('PRAGMA table_info(rooms)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('ai_ask_count', $roomCols2)) $pdo->exec('ALTER TABLE rooms ADD COLUMN ai_ask_count INTEGER DEFAULT 0');
 
         // 第一个注册的用户自动设为管理员（如果还没有管理员）
         $adminCount = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE is_admin = 1')->fetchColumn();

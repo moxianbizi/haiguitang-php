@@ -57,15 +57,30 @@ function renderMd(md) {
   let html;
   if (typeof marked !== "undefined") {
     html = marked.parse(String(md ?? ""));
-    // XSS 防护：移除危险标签和事件属性（保留 span/em/img/br 等安全标签）
-    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-               .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
-               .replace(/<object\b[^>]*>/gi, "").replace(/<\/object>/gi, "")
-               .replace(/<embed\b[^>]*>/gi, "")
-               .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-               .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-               .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-               .replace(/javascript:/gi, "");
+    if (typeof DOMPurify !== "undefined") {
+      html = DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: [
+          "span", "em", "strong", "img", "br", "p", "a", "code", "pre",
+          "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+          "table", "thead", "tbody", "tr", "th", "td", "del", "sup", "sub",
+          "hr", "div", "dl", "dt", "dd",
+        ],
+        ALLOWED_ATTR: [
+          "style", "alt", "class", "href", "target", "colspan", "rowspan",
+          "align", "valign",
+        ],
+        ALLOW_DATA_ATTR: false,
+      });
+    } else {
+      html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+                 .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+                 .replace(/<object\b[^>]*>/gi, "").replace(/<\/object>/gi, "")
+                 .replace(/<embed\b[^>]*>/gi, "")
+                 .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+                 .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+                 .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
+                 .replace(/javascript:/gi, "");
+    }
   } else {
     // marked 加载失败时回退到纯文本转义
     html = escapeHtml(md).replace(/\n/g, "<br>");
@@ -144,8 +159,21 @@ const KeyMgr = {
     else localStorage.removeItem("hgt_deepseek_key");
   },
   has() { return !!store.aiKey; },
+  getConfig() {
+    try { return JSON.parse(localStorage.getItem("hgt_ai_config") || "{}"); } catch { return {}; }
+  },
+  setConfig(cfg) {
+    localStorage.setItem("hgt_ai_config", JSON.stringify(cfg));
+  },
+  getProviderPayload() {
+    const cfg = this.getConfig();
+    return {
+      provider: cfg.provider || "deepseek",
+      base_url: cfg.baseUrl || "",
+      model: cfg.model || "",
+    };
+  },
   async test(key) {
-    // 用一个极简请求测试 Key 有效性（向 /api/ai/ask 发一个测试问）
     const k = (key || store.aiKey).trim();
     if (!k) return { ok: false, msg: "请先填写 Key" };
     if (!store.soups.length) await loadSoups();
@@ -155,12 +183,12 @@ const KeyMgr = {
       soup_id: testSoup.id,
       question: "测试",
       api_key: k,
+      ...this.getProviderPayload(),
     });
     if (ok && data.answer) return { ok: true, msg: "连接成功" };
     if (data.code === "missing_key") return { ok: false, msg: "Key 为空" };
     if (data.code === "invalid_key") return { ok: false, msg: "Key 无效或已过期" };
     if (data.code === "insufficient_balance") return { ok: false, msg: "账户余额不足" };
-    // 即便上游报错，也说明 Key 通到了 DeepSeek（格式正确）
     if (data.code === "upstream_error" || data.code === "parse_error")
       return { ok: true, msg: "Key 格式有效（上游返回：" + (data.error || "").slice(0, 40) + "）" };
     return { ok: false, msg: data.error || "测试失败" };
@@ -220,6 +248,11 @@ function headerHtml(active = "") {
         ${u && u.is_admin ? `<a href="#/admin" class="${active === "admin" ? "active" : ""}">⚙ 后台</a>` : ""}
       </div>
     </header>
+    <nav class="bottom-nav">
+      <a href="#/" class="${active === "home" ? "active" : ""}">🏠<br>汤馆</a>
+      <a href="#/rooms" class="${active === "rooms" ? "active" : ""}">🎮<br>房间</a>
+      ${u ? `<a href="#/profile" class="${active === "profile" ? "active" : ""}">👤<br>我的</a>` : `<a href="#/auth">🔑<br>登录</a>`}
+    </nav>
   `;
 }
 
@@ -513,14 +546,170 @@ function renderSoupPageContent(soup) {
 
         <div class="soup-detail-actions">
           <button class="btn btn-primary" onclick="newRoomFromSoup(${soup.id})">🎮 开房间</button>
+          ${store.user && (store.user.is_admin || store.user.id === soup.author_id) ? `<button class="btn btn-secondary" onclick="openSoupEditor(${soup.id})">✏️ 编辑</button>` : ""}
           ${store.user ? `<a class="btn btn-ghost" href="/api/soups/${soup.id}/download" download>⬇ 下载</a>` : `<a href="#/auth" class="btn btn-ghost">⬇ 登录后下载</a>`}
+        </div>
+
+        <div class="comments-section">
+          <div class="section-label">评论区</div>
+          <div id="commentsList"><div class="spinner" style="margin:12px auto"></div></div>
+          ${store.user ? `
+          <div class="comment-form">
+            <textarea class="input" id="commentInput" rows="2" maxlength="1000" placeholder="发表你的看法…"></textarea>
+            <button class="btn btn-primary" onclick="submitComment(${soup.id})">发表</button>
+          </div>` : `<p class="ai-hint" style="margin:8px 0"><a href="#/auth">登录</a>后即可评论</p>`}
         </div>
       </div>
       <div id="modalRoot"></div>
     </div>
   `;
   window.scrollTo(0, 0);
+  loadComments(soup.id);
 }
+
+async function loadComments(soupId, page = 1) {
+  const { ok, data } = await API.json(`/api/soups/${soupId}/comments?page=${page}`);
+  const c = $("#commentsList");
+  if (!c) return;
+  if (!ok) { c.innerHTML = `<p style="color:var(--text-3)">加载失败</p>`; return; }
+  if (!data.comments.length) { c.innerHTML = `<p style="color:var(--text-3);margin:8px 0">暂无评论</p>`; return; }
+  c.innerHTML = data.comments.map(cm => {
+    const mine = store.user && cm.user_id === store.user.id;
+    const admin = store.user && store.user.is_admin;
+    return `<div class="comment-item">
+      <div class="comment-meta"><strong>${escapeHtml(cm.username)}</strong> · ${escapeHtml(cm.created_at || "")}${mine || admin ? ` <button class="comment-del-btn" onclick="deleteComment(${soupId},${cm.id})">删除</button>` : ""}</div>
+      <div class="comment-content">${escapeHtml(cm.content)}</div>
+    </div>`;
+  }).join("");
+}
+
+window.submitComment = async (soupId) => {
+  const input = $("#commentInput");
+  if (!input) return;
+  const content = input.value.trim();
+  if (!content) { toast("请输入评论内容", "err"); return; }
+  const { ok, data } = await API.post(`/api/soups/${soupId}/comments`, { content });
+  if (!ok) { toast(data.error || "评论失败", "err"); return; }
+  input.value = "";
+  loadComments(soupId);
+};
+
+window.deleteComment = async (soupId, commentId) => {
+  if (!confirm("确认删除此评论？")) return;
+  const { ok, data } = await API.del(`/api/soups/${soupId}/comments/${commentId}`);
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  loadComments(soupId);
+};
+
+window.openSoupEditor = async (soupId) => {
+  const { ok, data } = await API.json(`/api/soups/${soupId}`);
+  if (!ok) { toast(data.error || "加载失败", "err"); return; }
+  const draftKey = `soup_draft_${soupId}`;
+  const draft = JSON.parse(localStorage.getItem(draftKey) || "null");
+  const soup = draft || data;
+  const root = $("#modalRoot");
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open" style="max-width:900px">
+      <div class="modal-header"><div><h2 class="modal-title">编辑汤题</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+        <div class="field"><label>标题</label><input class="input" id="ed_title" value="${escapeHtml(soup.title || '')}" oninput="previewSoupEdit()" /></div>
+        <div class="admin-row">
+          <div class="field"><label>系列</label><input class="input" id="ed_season" value="${escapeHtml(soup.season || '')}" /></div>
+          <div class="field"><label>集</label><input class="input" id="ed_episode" value="${escapeHtml(soup.episode || '')}" /></div>
+        </div>
+        <div class="editor-tabs">
+          <button class="editor-tab active" onclick="switchEditorTab('surface',this)">汤面</button>
+          <button class="editor-tab" onclick="switchEditorTab('base',this)">汤底</button>
+          <button class="editor-tab" onclick="switchEditorTab('host_manual',this)">主持人手册</button>
+          <button class="editor-tab" onclick="switchEditorTab('extra',this)">其他内容</button>
+          <button class="editor-tab" onclick="switchEditorTab('images',this)">配图</button>
+        </div>
+        <div class="editor-layout">
+          <textarea class="input editor-textarea" id="ed_surface" rows="10" placeholder="汤面内容…" oninput="previewSoupEdit()">${escapeHtml(soup.surface || '')}</textarea>
+          <textarea class="input editor-textarea" id="ed_base" rows="10" placeholder="汤底内容…" style="display:none" oninput="previewSoupEdit()">${escapeHtml(soup.base || '')}</textarea>
+          <textarea class="input editor-textarea" id="ed_host_manual" rows="10" placeholder="主持人手册…" style="display:none" oninput="previewSoupEdit()">${escapeHtml(soup.host_manual || '')}</textarea>
+          <textarea class="input editor-textarea" id="ed_extra" rows="10" placeholder="其他内容…" style="display:none" oninput="previewSoupEdit()">${escapeHtml(soup.extra || '')}</textarea>
+          <div id="ed_images" style="display:none">
+            <div id="imageList">${(soup.images || []).map((img, i) => `<div class="img-item"><img src="/soups-img/${escapeHtml(img)}" style="max-width:120px;max-height:80px;border-radius:4px" /><button class="admin-act-btn danger" onclick="deleteSoupImage(${soupId},${i})">删除</button></div>`).join("")}</div>
+            ${(soup.images || []).length < 5 ? `<label class="btn btn-secondary" style="cursor:pointer;margin-top:8px">上传图片<input type="file" accept="image/*" style="display:none" onchange="uploadSoupImage(${soupId},this)" /></label>` : "<p>已达5张上限</p>"}
+          </div>
+          <div class="editor-preview md-body" id="edPreview">${renderMd(soup.surface || '')}</div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeModal(event)">取消</button>
+        <button class="btn btn-primary" onclick="saveSoupEdit(${soupId})">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+  setInterval(() => {
+    const d = { title: $("#ed_title")?.value, surface: $("#ed_surface")?.value, base: $("#ed_base")?.value, host_manual: $("#ed_host_manual")?.value, extra: $("#ed_extra")?.value, season: $("#ed_season")?.value, episode: $("#ed_episode")?.value };
+    localStorage.setItem(`soup_draft_${soupId}`, JSON.stringify(d));
+  }, 5000);
+};
+
+let _editorCurrentTab = "surface";
+window.switchEditorTab = (tab, btn) => {
+  ["surface", "base", "host_manual", "extra"].forEach(t => {
+    const el = $(`#ed_${t}`);
+    if (el) el.style.display = t === tab ? "" : "none";
+  });
+  const imgEl = $("#ed_images");
+  if (imgEl) imgEl.style.display = tab === "images" ? "" : "none";
+  const previewEl = $("#edPreview");
+  if (previewEl) previewEl.style.display = tab === "images" ? "none" : "";
+  _editorCurrentTab = tab;
+  document.querySelectorAll(".editor-tab").forEach(b => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+  if (tab !== "images") previewSoupEdit();
+};
+
+window.previewSoupEdit = () => {
+  const el = $(`#ed_${_editorCurrentTab}`);
+  const preview = $("#edPreview");
+  if (el && preview) preview.innerHTML = renderMd(el.value || "");
+};
+
+window.saveSoupEdit = async (soupId) => {
+  const body = {
+    title: $("#ed_title")?.value.trim() || "",
+    surface: $("#ed_surface")?.value || "",
+    base: $("#ed_base")?.value || "",
+    host_manual: $("#ed_host_manual")?.value || "",
+    extra: $("#ed_extra")?.value || "",
+    season: $("#ed_season")?.value || "",
+    episode: $("#ed_episode")?.value || "",
+  };
+  if (!body.title) { toast("标题不能为空", "err"); return; }
+  const { ok, data } = await API.put(`/api/soups/${soupId}`, body);
+  if (!ok) { toast(data.error || "保存失败", "err"); return; }
+  localStorage.removeItem(`soup_draft_${soupId}`);
+  toast("已保存", "ok");
+  closeModal();
+  renderSoupPage(soupId);
+};
+
+window.uploadSoupImage = async (soupId, input) => {
+  if (!input.files || !input.files[0]) return;
+  const formData = new FormData();
+  formData.append("image", input.files[0]);
+  const csrf = store.csrfToken || "";
+  const res = await fetch(`/api/soups/${soupId}/images`, { method: "POST", headers: { "X-CSRF-Token": csrf }, body: formData });
+  const data = await res.json();
+  if (!res.ok || data.error) { toast(data.error || "上传失败", "err"); return; }
+  toast("上传成功", "ok");
+  openSoupEditor(soupId);
+};
+
+window.deleteSoupImage = async (soupId, index) => {
+  if (!confirm("确认删除此图片？")) return;
+  const { ok, data } = await API.del(`/api/soups/${soupId}/images`, { index });
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  toast("已删除", "ok");
+  openSoupEditor(soupId);
+};
 
 function classifyAnswer(ans) {
   const a = (ans || "").trim();
@@ -560,6 +749,7 @@ async function askAiSingle(soupId) {
     soup_id: soupId,
     question: q,
     api_key: key,
+    ...KeyMgr.getProviderPayload(),
   });
 
   const last = store.aiHistory[soupId][store.aiHistory[soupId].length - 1];
@@ -635,7 +825,7 @@ window.closeModal = closeModal;
 
 async function newRoomFromSoup(soupId) {
   if (!store.user) { toast("请先登录", "err"); location.hash = "#/auth"; return; }
-  const { ok, data } = await API.post("/api/rooms", { soup_id: soupId, ai_enabled: true });
+  const { ok, data } = await API.post("/api/rooms", { soup_id: soupId, ai_enabled: true, ai_question_limit: 0, member_limit: 0 });
   if (!ok) { toast(data.error || "创建房间失败", "err"); return; }
   closeModal();
   location.hash = "#/room/" + data.code;
@@ -736,6 +926,14 @@ async function renderRooms() {
           <label style="display:flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--text-2);margin-bottom:14px">
             <input type="checkbox" id="newRoomAi" checked /> 启用 AI 主持人
           </label>
+          <div class="field">
+            <label>AI 提问次数上限（0 = 无限）</label>
+            <input class="input" id="newRoomAiLimit" type="number" min="0" max="999" value="0" placeholder="0 = 无限" />
+          </div>
+          <div class="field">
+            <label>房间人数上限（0 = 无限）</label>
+            <input class="input" id="newRoomMemberLimit" type="number" min="0" max="99" value="0" placeholder="0 = 无限" />
+          </div>
           <button class="btn btn-primary" style="width:100%" onclick="createRoom()">创建房间</button>
           ${!KeyMgr.has() ? `<p class="ai-hint" style="margin-top:10px"><span class="warn">提示：</span>启用 AI 需先在右上角 ⚙ 配置 DeepSeek Key</p>` : ""}
         </div>
@@ -761,7 +959,7 @@ async function loadRoomList() {
     <div class="room-card">
       <div>
         <div class="code">${escapeHtml(r.code)}</div>
-        <div class="info">房主：${escapeHtml(r.host?.username || "未知")} · ${r.ai_enabled ? "AI 已启用" : "无 AI"}</div>
+        <div class="info">房主：${escapeHtml(r.host?.username || "未知")} · ${r.ai_enabled ? "AI 已启用" : "无 AI"}${r.ai_question_limit > 0 ? ` · AI ${r.ai_question_count}/${r.ai_question_limit}` : ""}${r.member_limit > 0 ? ` · ${r.member_count}/${r.member_limit}人` : ""}</div>
       </div>
       <button class="btn btn-primary" style="min-width:auto;flex:0 0 auto;padding:8px 18px" onclick="location.hash='#/room/${r.code}'">进入</button>
     </div>
@@ -813,6 +1011,8 @@ window.createRoom = async () => {
   const { ok, data } = await API.post("/api/rooms", {
     soup_id: _pickedSoupId || null,
     ai_enabled,
+    ai_question_limit: parseInt($("#newRoomAiLimit")?.value) || 0,
+    member_limit: parseInt($("#newRoomMemberLimit")?.value) || 0,
   });
   if (!ok) { toast(data.error || "创建失败", "err"); return; }
   location.hash = "#/room/" + data.code;
@@ -845,7 +1045,7 @@ async function renderRoom(code) {
           <div class="chat-header">
             <div>
               <div class="chat-title">${escapeHtml(room.code)}</div>
-              <div class="chat-code">${room.ai_enabled ? "AI 主持人已启用" : "无 AI"}</div>
+              <div class="chat-code">${room.ai_enabled ? "AI 主持人已启用" : "无 AI"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}</div>
             </div>
             <button class="btn-icon" onclick="location.hash='#/rooms'" title="离开">←</button>
           </div>
@@ -854,7 +1054,7 @@ async function renderRoom(code) {
           <div class="chat-input">
             <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendChat()" ${room.status === "ended" ? "disabled" : ""} />
             <button class="btn btn-secondary" onclick="sendChat()" title="发送" ${room.status === "ended" ? "disabled" : ""}>💬</button>
-            ${room.ai_enabled && room.status !== "ended" ? `<button class="btn btn-primary" onclick="sendAiQuestion()" title="向AI提问">🤖</button>` : ""}
+            ${room.ai_enabled && room.status !== "ended" ? `<button class="btn btn-primary" onclick="sendAiQuestion()" title="向AI提问" ${room.status === "ended" || (room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit) ? "disabled" : ""}>🤖</button>` : ""}
           </div>
         </div>
         <div class="room-side">
@@ -967,6 +1167,7 @@ window.sendAiQuestion = async () => {
   const { ok, data } = await API.post(`/api/rooms/${code}/ai-question`, {
     content,
     api_key: KeyMgr.get(),
+    ...KeyMgr.getProviderPayload(),
   });
   if (!ok) { toast(data.error || "提问失败", "err"); return; }
   if (data.error) toast(data.error, "err");
@@ -1037,11 +1238,31 @@ async function renderProfile() {
             <div class="profile-stat"><span>DeepSeek Key</span><span class="v">${KeyMgr.has() ? "已配置" : "未配置"}</span></div>
             <button class="btn btn-secondary" style="margin-top:16px;width:100%" onclick="openSettings()">配置 Key</button>
           </div>
+          <div class="profile-card">
+            <h3>关注</h3>
+            <div id="followingList"><div class="spinner" style="margin:8px auto"></div></div>
+          </div>
+          <div class="profile-card">
+            <h3>粉丝</h3>
+            <div id="followersList"><div class="spinner" style="margin:8px auto"></div></div>
+          </div>
         </div>
       </div>
       <div id="modalRoot"></div>
     </div>
   `;
+  loadFollowList("following");
+  loadFollowList("followers");
+}
+
+async function loadFollowList(type) {
+  const { ok, data } = await API.json(`/api/follow/${type}`);
+  const el = $(`#${type}List`);
+  if (!el) return;
+  if (!ok || !data.list.length) { el.innerHTML = `<p style="color:var(--text-3);margin:4px 0">暂无${type === "following" ? "关注" : "粉丝"}</p>`; return; }
+  el.innerHTML = data.list.map(u => `
+    <div class="profile-stat"><span>${escapeHtml(u.username)}</span><span class="v">${type === "followers" && u.mutual ? "互关" : ""}</span></div>
+  `).join("");
 }
 
 window.doLogout = async () => {
@@ -1056,6 +1277,7 @@ function openSettings() {
   const root = $("#modalRoot");
   if (!root) return;
   const has = KeyMgr.has();
+  const cfg = KeyMgr.getConfig();
   root.innerHTML = `
     <div class="overlay open" onclick="closeSettings(event)"></div>
     <div class="modal open">
@@ -1066,7 +1288,7 @@ function openSettings() {
       <div class="modal-body">
         <div class="warning-box">
           <strong>⚠ 安全提示</strong>
-          Key 仅保存在你的浏览器 localStorage 中，每次提问会随请求发到后端并透传给 DeepSeek。
+          Key 仅保存在你的浏览器 localStorage 中，每次提问会随请求发到后端并透传给 AI 服务。
           请勿在公共电脑上保存；后端不存储、不记录你的 Key。
         </div>
         <div class="settings-row">
@@ -1074,7 +1296,23 @@ function openSettings() {
           <span class="settings-status ${has ? "ok" : "no"}">${has ? "已配置" : "未配置"}</span>
         </div>
         <div class="field" style="margin-top:16px">
-          <label>DeepSeek API Key</label>
+          <label>AI 提供商</label>
+          <select class="input" id="aiProvider" onchange="onProviderChange()">
+            <option value="deepseek" ${cfg.provider === "deepseek" ? "selected" : ""}>DeepSeek</option>
+            <option value="openai" ${cfg.provider === "openai" ? "selected" : ""}>OpenAI</option>
+            <option value="custom" ${cfg.provider === "custom" ? "selected" : ""}>自定义（兼容 OpenAI 格式）</option>
+          </select>
+        </div>
+        <div class="field" id="customUrlField" style="display:${cfg.provider === "custom" ? "block" : "none"}">
+          <label>API 地址</label>
+          <input class="input mono" id="aiBaseUrl" placeholder="https://your-api.com/v1" value="${escapeHtml(cfg.baseUrl || "")}" />
+        </div>
+        <div class="field">
+          <label>模型名</label>
+          <input class="input mono" id="aiModel" placeholder="deepseek-v4-flash" value="${escapeHtml(cfg.model || "")}" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
           <input class="input mono" id="apiKeyInput" type="password" placeholder="sk-..." value="${has ? escapeHtml(KeyMgr.get()) : ""}" />
         </div>
         <div id="testResult"></div>
@@ -1107,10 +1345,24 @@ function closeSettings(e) {
 }
 window.closeSettings = closeSettings;
 
+window.onProviderChange = () => {
+  const p = $("#aiProvider").value;
+  const f = $("#customUrlField");
+  if (f) f.style.display = p === "custom" ? "block" : "none";
+  const m = $("#aiModel");
+  if (p === "deepseek" && !m.value) m.placeholder = "deepseek-v4-flash";
+  else if (p === "openai" && !m.value) m.placeholder = "gpt-4o-mini";
+  else m.placeholder = "model-name";
+};
+
 window.saveKey = () => {
   const v = $("#apiKeyInput").value.trim();
   if (!v) { toast("Key 不能为空", "err"); return; }
   KeyMgr.set(v);
+  const provider = $("#aiProvider").value;
+  const baseUrl = $("#aiBaseUrl")?.value.trim() || "";
+  const model = $("#aiModel")?.value.trim() || "";
+  KeyMgr.setConfig({ provider, baseUrl, model });
   toast("已保存", "ok");
   closeSettings();
 };
@@ -1154,6 +1406,7 @@ function renderAdmin(hash) {
   const section = hash.replace(/^\/admin\/?/, "") || "dashboard";
   const sections = [
     { id: "dashboard", label: "📊 仪表盘" },
+    { id: "analytics", label: "📈 数据分析" },
     { id: "users", label: "👤 用户管理" },
     { id: "soups", label: "🍲 汤管理" },
     { id: "rooms", label: "🎮 房间管理" },
@@ -1178,6 +1431,7 @@ function renderAdmin(hash) {
   `;
 
   if (section === "dashboard") adminDashboard();
+  else if (section === "analytics") adminAnalytics();
   else if (section === "users") adminUsers();
   else if (section === "soups") adminSoups();
   else if (section === "rooms") adminRooms();
@@ -1192,6 +1446,64 @@ function fmtSize(bytes) {
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
   return (bytes / 1048576).toFixed(2) + " MB";
 }
+
+async function adminAnalytics() {
+  const c = $("#adminContent");
+  if (c) c.innerHTML = `<div class="admin-loading"><div class="spinner"></div></div>`;
+  const [trendsRes, aiRes, retentionRes, roomsRes] = await Promise.all([
+    AdminAPI.get("/api/admin/stats/trends?days=30"),
+    AdminAPI.get("/api/admin/stats/ai-usage?days=30"),
+    AdminAPI.get("/api/admin/stats/retention"),
+    AdminAPI.get("/api/admin/stats/rooms?days=30"),
+  ]);
+  if (!c) return;
+  const trends = trendsRes.ok ? trendsRes.data : {};
+  const ai = aiRes.ok ? aiRes.data : {};
+  const ret = retentionRes.ok ? retentionRes.data : {};
+  const rooms = roomsRes.ok ? roomsRes.data : {};
+
+  const drawLine = (data, color) => {
+    if (!data || !data.length) return '<p style="color:var(--text-3)">暂无数据</p>';
+    const max = Math.max(...data.map(d => d.c), 1);
+    const w = 100, h = 40;
+    const pts = data.map((d, i) => `${(i / (data.length - 1 || 1)) * w},${h - (d.c / max) * h}`).join(' ');
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-width:400px;height:80px"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" /></svg>`;
+  };
+
+  c.innerHTML = `
+    <div class="admin-section">
+      <h2 class="admin-title">📈 数据分析</h2>
+      <div class="profile-grid">
+        <div class="profile-card">
+          <h3>汤题热度趋势（近30天）</h3>
+          ${drawLine(trends.soups, '#e94560')}
+          ${trends.top_soups ? `<h4 style="margin-top:8px">热门汤题</h4>${trends.top_soups.map(s => `<div class="profile-stat"><span>${escapeHtml(s.title)}</span><span class="v">${s.view_count}次浏览</span></div>`).join('')}` : ''}
+        </div>
+        <div class="profile-card">
+          <h3>AI 使用量</h3>
+          <div class="profile-stat"><span>总提问数</span><span class="v">${ai.total || 0}</span></div>
+          <div class="profile-stat"><span>房间模式</span><span class="v">${ai.room_ai || 0}</span></div>
+          <div class="profile-stat"><span>单人模式</span><span class="v">${ai.single_ai || 0}</span></div>
+          ${drawLine(ai.daily, '#4caf50')}
+        </div>
+        <div class="profile-card">
+          <h3>用户活跃度</h3>
+          <div class="profile-stat"><span>总用户</span><span class="v">${ret.total_users || 0}</span></div>
+          <div class="profile-stat"><span>DAU</span><span class="v">${ret.dau || 0}</span></div>
+          <div class="profile-stat"><span>WAU</span><span class="v">${ret.wau || 0}</span></div>
+          <div class="profile-stat"><span>MAU</span><span class="v">${ret.mau || 0}</span></div>
+        </div>
+        <div class="profile-card">
+          <h3>房间趋势</h3>
+          <div class="profile-stat"><span>总房间</span><span class="v">${rooms.total || 0}</span></div>
+          <div class="profile-stat"><span>AI房间占比</span><span class="v">${rooms.ai_ratio || 0}%</span></div>
+          ${drawLine(rooms.daily, '#ff9800')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+window.adminAnalytics = adminAnalytics;
 
 // ---- 仪表盘 ----
 async function adminDashboard() {
@@ -1426,21 +1738,24 @@ async function adminSoups(page = 1) {
         </div>
       </div>
       <table class="admin-table">
-        <thead><tr><th>ID</th><th>标题</th><th>系列</th><th>集</th><th>文件名</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>标题</th><th>系列</th><th>集</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
-          ${data.soups.map(s => `
+          ${data.soups.map(s => {
+            const statusLabel = s.status === 'approved' ? '<span style="color:#4caf50">已通过</span>' : s.status === 'rejected' ? '<span style="color:#f44336">已拒绝</span>' : '<span style="color:#ff9800">待审核</span>';
+            return `
             <tr>
               <td>${s.id}</td>
               <td>${escapeHtml(s.title)}</td>
               <td>${escapeHtml(s.season || '-')}</td>
               <td>${escapeHtml(s.episode || '-')}</td>
-              <td>${escapeHtml(s.filename)}</td>
+              <td>${statusLabel}</td>
               <td class="admin-actions">
+                ${s.status === 'pending' ? `<button class="admin-act-btn" style="color:#4caf50" onclick="adminSoupApprove(${s.id})">通过</button><button class="admin-act-btn" style="color:#f44336" onclick="adminSoupReject(${s.id})">拒绝</button>` : ''}
                 <button class="admin-act-btn" onclick="adminSoupEditModal(${s.id})">编辑</button>
                 <button class="admin-act-btn danger" onclick="adminSoupDelete(${s.id}, '${escapeJs(s.title)}')">删除</button>
               </td>
-            </tr>
-          `).join("")}
+            </tr>`;
+          }).join("")}
         </tbody>
       </table>
       ${adminPagination(data.page, data.total_pages, "adminSoups")}
@@ -1508,6 +1823,22 @@ window.adminSoupDelete = async (id, title) => {
   const { ok, data } = await AdminAPI.del(`/api/admin/soups/${id}`);
   if (!ok) { toast(data.error || "删除失败", "err"); return; }
   toast("已删除", "ok");
+  adminSoups();
+};
+
+window.adminSoupApprove = async (id) => {
+  const { ok, data } = await AdminAPI.post(`/api/admin/soups/${id}/approve`, {});
+  if (!ok) { toast(data.error || "审核失败", "err"); return; }
+  toast("审核通过", "ok");
+  adminSoups();
+};
+
+window.adminSoupReject = async (id) => {
+  const reason = prompt("请输入拒绝原因：");
+  if (!reason || !reason.trim()) return;
+  const { ok, data } = await AdminAPI.post(`/api/admin/soups/${id}/reject`, { reason: reason.trim() });
+  if (!ok) { toast(data.error || "操作失败", "err"); return; }
+  toast("已拒绝", "ok");
   adminSoups();
 };
 

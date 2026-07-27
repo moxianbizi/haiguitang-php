@@ -45,6 +45,18 @@ class Config {
     /** Session 超时（秒，0 表示不限制；默认 30 天，与 cookie lifetime 一致） */
     public static $SESSION_TIMEOUT = 2592000;
 
+    /** 频率限制：AI 提问每分钟最大次数 */
+    public static $RATE_LIMIT_AI_ASK = 10;
+
+    /** 频率限制：房间创建每分钟最大次数 */
+    public static $RATE_LIMIT_ROOM_CREATE = 5;
+
+    /** 频率限制：消息发送每房间每分钟最大次数 */
+    public static $RATE_LIMIT_MSG_SEND = 30;
+
+    /** 频率限制：自动清理过期记录的概率（0-1） */
+    public static $RATE_LIMIT_CLEANUP_PROBABILITY = 0.01;
+
     /** 初始化时从环境变量覆盖 */
     public static function load() {
         $env = function($key, $default) {
@@ -63,9 +75,29 @@ class Config {
         self::$MAIL_FROM = $env('MAIL_FROM', self::$MAIL_FROM);
         self::$TOOL_TOKEN = $env('TOOL_TOKEN', self::$TOOL_TOKEN);
         self::$ADMIN_API_TOKEN = $env('ADMIN_API_TOKEN', self::$ADMIN_API_TOKEN);
+        self::$RATE_LIMIT_AI_ASK = (int)$env('RATE_LIMIT_AI_ASK', self::$RATE_LIMIT_AI_ASK);
+        self::$RATE_LIMIT_ROOM_CREATE = (int)$env('RATE_LIMIT_ROOM_CREATE', self::$RATE_LIMIT_ROOM_CREATE);
+        self::$RATE_LIMIT_MSG_SEND = (int)$env('RATE_LIMIT_MSG_SEND', self::$RATE_LIMIT_MSG_SEND);
 
         if (self::$SECRET_KEY === '') {
             self::$SECRET_KEY = bin2hex(random_bytes(32));
+        }
+    }
+
+    /** 从 settings 表加载持久化配置（覆盖默认值与环境变量，由 DB 初始化后调用） */
+    public static function load_from_db() {
+        try {
+            $pdo = DB::pdo();
+            $stmt = $pdo->query('SELECT key, value FROM settings');
+            if (!$stmt) return;
+            foreach ($stmt->fetchAll() as $r) {
+                $k = $r['key'];
+                $v = $r['value'];
+                if ($k === 'allow_submit') self::$ALLOW_SUBMIT = ($v === '1');
+                elseif ($k === 'room_msg_limit') self::$ROOM_MSG_LIMIT = (int)$v;
+            }
+        } catch (Throwable $e) {
+            // 表不存在或数据库未初始化时忽略
         }
     }
 }

@@ -112,7 +112,7 @@ function handle_action(string $op) {
                 if ($before === $after) {
                     $result['output'] .= "\nℹ️ HEAD 未变化（本地已是最新，或远程没有新提交）";
                 } else {
-                    $count = trim(run_shell("git rev-list ${before}..${after} --count 2>&1"));
+                    $count = trim(run_shell('git rev-list ' . escapeshellarg($before) . '..' . escapeshellarg($after) . ' --count 2>&1'));
                     $result['output'] .= "\n✅ 已更新到新版本，新增 $count 个提交";
                 }
                 break;
@@ -155,7 +155,7 @@ function handle_action(string $op) {
                 ob_start();
                 phpinfo();
                 $info = ob_get_clean();
-                $result['output'] = 'PHP 版本: ' . PHP_VERSION . '\nSAPI: ' . PHP_SAPI . '\n已加载扩展: ' . implode(', ', get_loaded_extensions());
+                $result['output'] = "PHP 版本: " . PHP_VERSION . "\nSAPI: " . PHP_SAPI . "\n已加载扩展: " . implode(', ', get_loaded_extensions());
                 break;
             case 'check_updates':
                 // 关键：必须先 fetch，否则 origin/<branch> 是本地缓存的旧值

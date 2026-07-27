@@ -20,3 +20,8 @@
   Require all denied
 </FilesMatch>
 
+# 限制 tool.php 仅本地访问
+<Files "tool.php">
+  Require ip 127.0.0.1 ::1
+</Files>
+

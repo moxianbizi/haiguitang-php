@@ -59,25 +59,36 @@ function login_rate_limit(): bool {
     $now = time();
 
     $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT value FROM settings WHERE key = ?');
-    $stmt->execute([$key]);
-    $row = $stmt->fetch();
-
-    if ($row) {
-        $data = json_decode($row['value'], true) ?: ['count' => 0, 'window_start' => $now];
-        if ($now - $data['window_start'] > $window) {
-            $data = ['count' => 1, 'window_start' => $now];
-        } else {
-            $data['count']++;
-        }
-    } else {
-        $data = ['count' => 1, 'window_start' => $now];
+    // BEGIN IMMEDIATE 串行化并发，避免登录爆破绕过限制
+    try {
+        $pdo->exec('BEGIN IMMEDIATE');
+    } catch (Throwable $e) {
+        return true;
     }
+    try {
+        $stmt = $pdo->prepare('SELECT value FROM settings WHERE key = ?');
+        $stmt->execute([$key]);
+        $row = $stmt->fetch();
 
-    $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
-    $stmt->execute([$key, json_encode($data)]);
+        if ($row) {
+            $data = json_decode($row['value'], true) ?: ['count' => 0, 'window_start' => $now];
+            if ($now - $data['window_start'] > $window) {
+                $data = ['count' => 1, 'window_start' => $now];
+            } else {
+                $data['count']++;
+            }
+        } else {
+            $data = ['count' => 1, 'window_start' => $now];
+        }
 
-    return $data['count'] <= $maxAttempts;
+        $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
+        $stmt->execute([$key, json_encode($data)]);
+        $pdo->exec('COMMIT');
+        return $data['count'] <= $maxAttempts;
+    } catch (Throwable $e) {
+        try { $pdo->exec('ROLLBACK'); } catch (Throwable $ee) {}
+        return true;
+    }
 }
 
 function auth_logout() {

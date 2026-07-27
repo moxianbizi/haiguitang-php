@@ -24,9 +24,15 @@ function handle_rooms(array $segments) {
 
 function rooms_create() {
     $user = require_login();
+    if (!rate_limit("room_create_user_{$user['id']}", Config::$RATE_LIMIT_ROOM_CREATE, 60)) {
+        json_error('创建房间过于频繁，请稍后再试', 429);
+    }
     $data = body_json();
     $soup_id = $data['soup_id'] ?? null;
     $ai_enabled = $data['ai_enabled'] ?? true;
+    $ai_question_limit = max(0, (int)($data['ai_question_limit'] ?? 0));
+    $member_limit = max(0, (int)($data['member_limit'] ?? 0));
+    if ($member_limit > 0 && $member_limit < 2) $member_limit = 2;
 
     $pdo = DB::pdo();
     $code = gen_room_code();
@@ -37,8 +43,8 @@ function rooms_create() {
         $code = gen_room_code();
     }
 
-    $stmt = $pdo->prepare('INSERT INTO rooms (code, host_id, soup_id, ai_enabled, status) VALUES (?, ?, ?, ?, ?)');
-    $stmt->execute([$code, $user['id'], $soup_id ? (int)$soup_id : null, $ai_enabled ? 1 : 0, 'playing']);
+    $stmt = $pdo->prepare('INSERT INTO rooms (code, host_id, soup_id, ai_enabled, ai_question_limit, member_limit, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$code, $user['id'], $soup_id ? (int)$soup_id : null, $ai_enabled ? 1 : 0, $ai_question_limit, $member_limit, 'playing']);
     $id = (int)$pdo->lastInsertId();
 
     // 系统消息
@@ -51,7 +57,10 @@ function rooms_create() {
 function rooms_list() {
     require_login();
     $pdo = DB::pdo();
-    $stmt = $pdo->query("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.created_at, u.username AS host_name FROM rooms r LEFT JOIN users u ON r.host_id = u.id WHERE r.status = 'playing' ORDER BY r.created_at DESC LIMIT 50");
+    $userId = (int)$_SESSION['user_id'];
+
+    $stmt = $pdo->prepare("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.ai_question_limit, r.ai_question_count, r.member_limit, r.created_at, u.username AS host_name, CASE WHEN f.follower_id IS NOT NULL THEN 0 ELSE 1 END AS sort_key FROM rooms r LEFT JOIN users u ON r.host_id = u.id LEFT JOIN follows f ON f.following_id = r.host_id AND f.follower_id = ? WHERE r.status = 'playing' ORDER BY sort_key, r.created_at DESC LIMIT 50");
+    $stmt->execute([$userId]);
     $rooms = $stmt->fetchAll();
     json_ok(['rooms' => array_map('room_to_dict', $rooms)]);
 }
@@ -117,8 +126,14 @@ function rooms_select_soup(string $code) {
 
     $data = body_json();
     $soup_id = $data['soup_id'] ?? null;
+    if ($soup_id) {
+        $soup_id = (int)$soup_id;
+        $stmt2 = $pdo->prepare("SELECT id FROM soups WHERE id = ? AND status = 'approved'");
+        $stmt2->execute([$soup_id]);
+        if (!$stmt2->fetch()) json_error('海龟汤不存在或未通过审核', 400);
+    }
     $stmt = $pdo->prepare('UPDATE rooms SET soup_id = ? WHERE code = ?');
-    $stmt->execute([$soup_id ? (int)$soup_id : null, $code]);
+    $stmt->execute([$soup_id ?: null, $code]);
 
     // 系统消息
     $stmt = $pdo->prepare('INSERT INTO messages (room_id, msg_type, content) VALUES (?, ?, ?)');
@@ -140,6 +155,15 @@ function rooms_send_message(string $code) {
     $r = $stmt->fetch();
     if (!$r) json_error('房间不存在', 404);
     if ($r['status'] !== 'playing') json_error('房间已结束');
+    if (!is_room_member($r, $user)) {
+        if ((int)$r['member_limit'] > 0) {
+            $memberCount = count_room_members($r);
+            if ($memberCount >= (int)$r['member_limit']) json_error('房间人数已达上限', 403);
+        }
+    }
+    if (!rate_limit("msg_room_{$r['id']}_user_{$user['id']}", Config::$RATE_LIMIT_MSG_SEND, 60)) {
+        json_error('发送消息过于频繁，请稍后再试', 429);
+    }
 
     $msg = save_message($r['id'], $user, 'chat', $content);
     json_ok(['message' => message_to_dict($msg)]);
@@ -150,6 +174,9 @@ function rooms_ai_question(string $code) {
     $data = body_json();
     $content = trim($data['content'] ?? '');
     $api_key = (string)($data['api_key'] ?? '');
+    $provider = (string)($data['provider'] ?? 'deepseek');
+    $ai_base_url = (string)($data['base_url'] ?? '');
+    $ai_model = (string)($data['model'] ?? '');
     if ($content === '') json_error('问题不能为空');
     validate_length($content, 500, '问题内容');
 
@@ -161,12 +188,20 @@ function rooms_ai_question(string $code) {
     if ($r['status'] !== 'playing') json_error('房间已结束');
     if (!$r['soup_id']) json_error('房间里还没有选汤');
     if (!$r['ai_enabled']) json_error('AI 未启用');
+    if (!is_room_member($r, $user)) json_error('您不是该房间成员', 403);
+    if (!rate_limit("ai_ask_user_{$user['id']}", Config::$RATE_LIMIT_AI_ASK, 60)) {
+        json_error('AI 提问过于频繁，请稍后再试', 429);
+    }
+
+    if ((int)$r['ai_question_limit'] > 0 && (int)$r['ai_question_count'] >= (int)$r['ai_question_limit']) {
+        json_error('AI 提问次数已达上限（' . (int)$r['ai_question_limit'] . '次）');
+    }
 
     // 保存问题
     $q_msg = save_message($r['id'], $user, 'ai_question', $content);
 
-    // 取汤（含主持人手册/其他内容）
-    $stmt = $pdo->prepare('SELECT surface, base, host_manual, extra FROM soups WHERE id = ?');
+    // 取汤（含主持人手册/其他内容，仅查已审核汤避免越权）
+    $stmt = $pdo->prepare("SELECT surface, base, host_manual, extra FROM soups WHERE id = ? AND status = 'approved'");
     $stmt->execute([$r['soup_id']]);
     $soup = $stmt->fetch();
     if (!$soup || empty($soup['base'])) {
@@ -185,7 +220,10 @@ function rooms_ai_question(string $code) {
             $content,
             $api_key,
             $soup['host_manual'] ?? '',
-            $soup['extra'] ?? ''
+            $soup['extra'] ?? '',
+            $provider,
+            $ai_base_url,
+            $ai_model
         );
     } catch (AIError $e) {
         json_ok([
@@ -195,6 +233,8 @@ function rooms_ai_question(string $code) {
             'code' => $e->aiCode,
         ]);
     }
+    // AI 调用成功后再递增提问计数（避免失败时白扣次数）
+    $pdo->exec('UPDATE rooms SET ai_question_count = ai_question_count + 1 WHERE id = ' . (int)$r['id']);
     $a_msg = save_message($r['id'], null, 'ai_answer', $answer);
     json_ok([
         'question' => message_to_dict($q_msg),
@@ -234,6 +274,18 @@ function save_message(int $room_id, ?array $user, string $type, string $content)
     return $stmt->fetch();
 }
 
+function count_room_members(array $room): int {
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT COUNT(DISTINCT user_id) FROM messages WHERE room_id = ? AND user_id IS NOT NULL');
+    $stmt->execute([$room['id']]);
+    $chatters = (int)$stmt->fetchColumn();
+    $hostId = (int)$room['host_id'];
+    $stmt2 = $pdo->prepare('SELECT 1 FROM messages WHERE room_id = ? AND user_id = ? LIMIT 1');
+    $stmt2->execute([$room['id'], $hostId]);
+    if (!$stmt2->fetch()) $chatters++;
+    return $chatters;
+}
+
 function room_to_dict(array $r): array {
     return [
         'id' => (int)$r['id'],
@@ -242,6 +294,10 @@ function room_to_dict(array $r): array {
         'soup_id' => $r['soup_id'] ? (int)$r['soup_id'] : null,
         'status' => $r['status'],
         'ai_enabled' => (bool)$r['ai_enabled'],
+        'ai_question_limit' => (int)($r['ai_question_limit'] ?? 0),
+        'ai_question_count' => (int)($r['ai_question_count'] ?? 0),
+        'member_limit' => (int)($r['member_limit'] ?? 0),
+        'member_count' => count_room_members($r),
     ];
 }
 

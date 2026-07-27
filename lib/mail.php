@@ -49,61 +49,65 @@ function smtp_send(string $host, int $port, string $user, string $pass, string $
     $fp = @stream_socket_client($remote, $errno, $errstr, 15, STREAM_CLIENT_CONNECT);
     if (!$fp) throw new RuntimeException($errstr ?: '连接 SMTP 失败');
 
-    $read = function() use ($fp): string {
-        $data = '';
-        while ($line = fgets($fp, 4096)) {
-            $data .= $line;
-            if (substr($line, 3, 1) === ' ') break; // SMTP 状态码后空格表示一行结束
-        }
-        return $data;
-    };
-    $write = function(string $cmd) use ($fp) { fwrite($fp, $cmd . "\r\n"); };
-    $expect = function(string $code) use ($read) {
-        $resp = $read();
-        if (!str_starts_with($resp, $code)) throw new RuntimeException('SMTP: ' . trim($resp));
-        return $resp;
-    };
+    try {
+        $read = function() use ($fp): string {
+            $data = '';
+            while ($line = fgets($fp, 4096)) {
+                $data .= $line;
+                if (substr($line, 3, 1) === ' ') break; // SMTP 状态码后空格表示一行结束
+            }
+            return $data;
+        };
+        $write = function(string $cmd) use ($fp) { fwrite($fp, $cmd . "\r\n"); };
+        $expect = function(string $code) use ($read) {
+            $resp = $read();
+            if (!str_starts_with($resp, $code)) throw new RuntimeException('SMTP: ' . trim($resp));
+            return $resp;
+        };
 
-    $expect('220');
-    $write('EHLO haiguitang.local');
-    $ehlo = $expect('250');
-
-    if (!$ssl && str_contains($ehlo, 'STARTTLS')) {
-        $write('STARTTLS');
         $expect('220');
-        stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
         $write('EHLO haiguitang.local');
+        $ehlo = $expect('250');
+
+        if (!$ssl && str_contains($ehlo, 'STARTTLS')) {
+            $write('STARTTLS');
+            $expect('220');
+            stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+            $write('EHLO haiguitang.local');
+            $expect('250');
+        }
+
+        $write('AUTH LOGIN');
+        $expect('334');
+        $write(base64_encode($user));
+        $expect('334');
+        $write(base64_encode($pass));
+        $expect('235');
+
+        $write('MAIL FROM:<' . $from . '>');
         $expect('250');
+        $write('RCPT TO:<' . $to . '>');
+        $expect('250');
+        $write('DATA');
+        $expect('354');
+
+        $headers = [
+            'From: <' . $from . '>',
+            'To: <' . $to . '>',
+            'Subject: =?UTF-8?B?' . base64_encode($subject) . '?=',
+            'MIME-Version: 1.0',
+            'Content-Type: text/html; charset=UTF-8',
+            'Content-Transfer-Encoding: base64',
+        ];
+        $msg = implode("\r\n", $headers) . "\r\n\r\n" . chunk_split(base64_encode($body));
+        $write($msg);
+        $write('.');
+        $expect('250');
+
+        $write('QUIT');
+        return true;
+    } finally {
+        // 无论成功失败都关闭句柄，避免资源泄漏
+        if (is_resource($fp)) fclose($fp);
     }
-
-    $write('AUTH LOGIN');
-    $expect('334');
-    $write(base64_encode($user));
-    $expect('334');
-    $write(base64_encode($pass));
-    $expect('235');
-
-    $write('MAIL FROM:<' . $from . '>');
-    $expect('250');
-    $write('RCPT TO:<' . $to . '>');
-    $expect('250');
-    $write('DATA');
-    $expect('354');
-
-    $headers = [
-        'From: <' . $from . '>',
-        'To: <' . $to . '>',
-        'Subject: =?UTF-8?B?' . base64_encode($subject) . '?=',
-        'MIME-Version: 1.0',
-        'Content-Type: text/html; charset=UTF-8',
-        'Content-Transfer-Encoding: base64',
-    ];
-    $msg = implode("\r\n", $headers) . "\r\n\r\n" . chunk_split(base64_encode($body));
-    $write($msg);
-    $write('.');
-    $expect('250');
-
-    $write('QUIT');
-    fclose($fp);
-    return true;
 }
