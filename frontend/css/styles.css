@@ -2614,3 +2614,98 @@ input, textarea {
   .join-box { width: 100%; }
 }
 .bottom-nav { display: none; }
+
+/* ---------- 自制汤广场卡片作者 ---------- */
+.card-author {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: var(--text-3);
+  margin-bottom: 6px;
+}
+
+/* ---------- 详情页作者区 ---------- */
+.soup-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 20px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  color: var(--text-2);
+}
+.soup-author .author-link {
+  color: var(--accent);
+  font-weight: 600;
+}
+.soup-author .author-link:hover { text-decoration: underline; }
+.soup-author .author-official {
+  color: var(--text-3);
+}
+.soup-author .btn { padding: 4px 14px; font-size: 0.82rem; margin-left: auto; }
+
+/* ---------- 我的投稿列表 ---------- */
+.my-submissions-card { grid-column: 1 / -1; }
+.submission-item {
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.submission-item:last-child { border-bottom: none; }
+.submission-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.submission-title {
+  font-weight: 600;
+  color: var(--text);
+  font-family: "Noto Serif SC", serif;
+}
+.submission-title:hover { color: var(--accent); }
+.submission-meta {
+  font-size: 0.78rem;
+  color: var(--text-3);
+  margin: 2px 0 8px;
+}
+.submission-actions {
+  display: flex;
+  gap: 8px;
+}
+.reject-reason {
+  font-size: 0.82rem;
+  color: var(--danger);
+  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid rgba(255, 107, 107, 0.18);
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin: 4px 0;
+}
+
+/* 投稿状态徽章 */
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.status-badge.pending {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--warning);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+}
+.status-badge.approved {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--success);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+}
+.status-badge.rejected {
+  background: rgba(255, 107, 107, 0.12);
+  color: var(--danger);
+  border: 1px solid rgba(255, 107, 107, 0.25);
+}

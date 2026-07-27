@@ -214,6 +214,10 @@ function route_api(string $path) {
             require_once __DIR__ . '/api/follow.php';
             handle_follow($segments);
             break;
+        case 'users':
+            require_once __DIR__ . '/api/users.php';
+            handle_users($segments);
+            break;
         case 'admin':
             require_once __DIR__ . '/api/admin.php';
             handle_admin($segments);

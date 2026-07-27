@@ -113,6 +113,8 @@ const store = {
   selected: null,
   search: "",
   season: "",
+  squareSoups: [],
+  squareSearch: "",
   aiKey: localStorage.getItem("hgt_deepseek_key") || "",
   csrfToken: "",
   // 单人模式每碗汤的问答历史（按 soup_id 存）
@@ -207,8 +209,10 @@ function route() {
   if (hash === "/" || hash === "") return renderHome();
   if (hash === "/auth") return renderAuth();
   if (hash === "/rooms") return renderRooms();
+  if (hash === "/square") return renderSquare();
   if (hash.startsWith("/room/")) return renderRoom(hash.slice("/room/".length));
   if (hash.startsWith("/soup/")) return renderSoupPage(hash.slice("/soup/".length));
+  if (hash.startsWith("/user/")) return renderUserPage(hash.slice("/user/".length));
   if (hash === "/profile") return renderProfile();
   if (hash.startsWith("/admin")) return renderAdmin(hash);
   renderHome();
@@ -229,6 +233,7 @@ function headerHtml(active = "") {
         </a>
         <nav class="nav">
           <a href="#/" class="nav-item ${active === "home" ? "active" : ""}">汤馆</a>
+          <a href="#/square" class="nav-item ${active === "square" ? "active" : ""}">广场</a>
           <a href="#/rooms" class="nav-item ${active === "rooms" ? "active" : ""}">房间</a>
           ${u ? `<a href="#/profile" class="nav-item ${active === "profile" ? "active" : ""}">我的</a>` : ""}
           ${u && u.is_admin ? `<a href="#/admin" class="nav-item ${active === "admin" ? "active" : ""}">后台</a>` : ""}
@@ -243,6 +248,7 @@ function headerHtml(active = "") {
       </div>
       <div class="mobile-nav" id="mobileNav" onclick="hideMobileNav(event)">
         <a href="#/" class="${active === "home" ? "active" : ""}">🏠 汤馆</a>
+        <a href="#/square" class="${active === "square" ? "active" : ""}">🌐 广场</a>
         <a href="#/rooms" class="${active === "rooms" ? "active" : ""}">🎮 房间</a>
         ${u ? `<a href="#/profile" class="${active === "profile" ? "active" : ""}">👤 我的</a>` : ""}
         ${u && u.is_admin ? `<a href="#/admin" class="${active === "admin" ? "active" : ""}">⚙ 后台</a>` : ""}
@@ -250,6 +256,7 @@ function headerHtml(active = "") {
     </header>
     <nav class="bottom-nav">
       <a href="#/" class="${active === "home" ? "active" : ""}">🏠<br>汤馆</a>
+      <a href="#/square" class="${active === "square" ? "active" : ""}">🌐<br>广场</a>
       <a href="#/rooms" class="${active === "rooms" ? "active" : ""}">🎮<br>房间</a>
       ${u ? `<a href="#/profile" class="${active === "profile" ? "active" : ""}">👤<br>我的</a>` : `<a href="#/auth">🔑<br>登录</a>`}
     </nav>
@@ -292,6 +299,7 @@ async function renderHome() {
           <span class="search-icon">🔍</span>
           <input type="text" id="searchInput" placeholder="搜索标题、汤面或系列…" value="${escapeHtml(store.search)}" />
         </div>
+        ${store.user ? `<div style="margin-top:18px"><button class="btn btn-primary" onclick="openSoupEditor()">✍️ 写一碗汤</button></div>` : `<p style="margin-top:18px;color:var(--text-3);font-size:0.9rem">想自己写汤？<a href="#/auth" style="color:var(--accent)">登录</a>后即可投稿，或去<a href="#/square" style="color:var(--accent)">自制汤广场</a>逛逛</p>`}
       </section>
       <div class="stats-bar container" id="statsBar">
         <div class="stat"><strong>${store.soups.length}</strong>收录汤数</div>
@@ -428,6 +436,154 @@ function renderHomeList() {
 
 window.setSeason = (s) => { store.season = s; applyFilters(); renderFilters(); renderHomeList(); };
 
+// ---------- 自制汤广场 ----------
+async function renderSquare() {
+  const q0 = store.squareSearch || "";
+  $("#app").innerHTML = `
+    <div class="page">
+      ${headerHtml("square")}
+      <section class="hero container">
+        <div class="hero-badge">🌐 社区创作</div>
+        <h1>自制汤广场</h1>
+        <p>这里收录社区玩家自己写的海龟汤。想动手写一碗？登录后投稿，经管理员审核通过即在此展示。</p>
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="squareSearchInput" placeholder="搜索标题或汤面…" value="${escapeHtml(q0)}" />
+        </div>
+        ${store.user
+          ? `<div style="margin-top:18px"><button class="btn btn-primary" onclick="openSoupEditor()">✍️ 写一碗汤</button></div>`
+          : `<p style="margin-top:18px;color:var(--text-3);font-size:0.9rem">想投稿？<a href="#/auth" style="color:var(--accent)">登录</a>后即可写汤</p>`}
+      </section>
+      <div class="stats-bar container" id="squareStats"><div class="stat"><strong>…</strong>自制汤数</div></div>
+      <div id="squareContent">${renderSkeletonGrid()}</div>
+      <footer class="footer container"><span>海龟汤馆 · 自制汤广场</span></footer>
+      <div id="modalRoot"></div>
+    </div>
+  `;
+  const input = $("#squareSearchInput");
+  if (input) {
+    input.addEventListener("input", (e) => {
+      store.squareSearch = e.target.value;
+      renderSquareList();
+      const next = $("#squareSearchInput");
+      if (next) { next.focus(); next.setSelectionRange(store.squareSearch.length, store.squareSearch.length); }
+    });
+  }
+  await loadSquareSoups();
+}
+
+async function loadSquareSoups() {
+  const { ok, data } = await API.json("/api/soups?source=community");
+  if (!ok) {
+    $("#squareContent").innerHTML = `<div class="empty"><div class="empty-icon">🍲</div><p>加载失败</p></div>`;
+    return;
+  }
+  store.squareSoups = data.soups || [];
+  const bar = $("#squareStats");
+  if (bar) bar.innerHTML = `<div class="stat"><strong>${store.squareSoups.length}</strong>自制汤数</div>`;
+  renderSquareList();
+}
+
+function renderSquareList() {
+  const c = $("#squareContent");
+  if (!c) return;
+  const q = (store.squareSearch || "").toLowerCase();
+  const items = (store.squareSoups || []).filter((s) =>
+    !q ||
+    (s.title || "").toLowerCase().includes(q) ||
+    (s.excerpt || "").toLowerCase().includes(q) ||
+    (s.surface || "").toLowerCase().includes(q)
+  );
+  if (!items.length) {
+    c.innerHTML = `<div class="empty"><div class="empty-icon">🍲</div><p>${q ? "没有找到匹配的自制汤" : "广场还没有自制汤，快来写第一碗吧"}</p></div>`;
+    return;
+  }
+  c.innerHTML = `<div class="container"><div class="grid" style="padding-bottom:28px">
+    ${items.map((s) => `
+      <article class="card" onclick="openSoup(${s.id})">
+        ${s.author_username ? `<span class="card-author">✍️ ${escapeHtml(s.author_username)}</span>` : ""}
+        <span class="card-tag">${escapeHtml(s.season || "自制")}${s.episode ? " · " + escapeHtml(s.episode) : ""}</span>
+        <h3>${escapeHtml(s.title)}</h3>
+        <p>${escapeHtml(s.excerpt || "")}</p>
+      </article>
+    `).join("")}
+  </div></div>`;
+}
+
+// ---------- 用户主页 ----------
+async function renderUserPage(id) {
+  const uid = parseInt(id, 10);
+  if (!uid || uid <= 0) { location.hash = "#/"; return; }
+  $("#app").innerHTML = `<div class="page">${headerHtml("")}<div class="container"><div class="spinner" style="margin:40px auto"></div></div><div id="modalRoot"></div></div>`;
+  const { ok, data } = await API.json(`/api/users/${uid}`);
+  if (!ok) {
+    $("#app").innerHTML = `<div class="page">${headerHtml("")}<div class="container"><div class="empty"><div class="empty-icon">👤</div><p>${escapeHtml(data.error || "用户不存在")}</p></div></div><div id="modalRoot"></div></div>`;
+    return;
+  }
+  const u = data.user, st = data.stats, isMe = data.is_me, following = data.following;
+  const followBtn = isMe
+    ? `<a href="#/profile" class="btn btn-secondary">编辑我的</a>`
+    : store.user
+      ? `<button class="btn ${following ? "btn-ghost" : "btn-primary"}" id="followBtn" onclick="toggleFollow(${uid})">${following ? "已关注" : "+ 关注"}</button>`
+      : `<a href="#/auth" class="btn btn-primary">登录后关注</a>`;
+  $("#app").innerHTML = `
+    <div class="page">
+      ${headerHtml("")}
+      <div class="container">
+        <button class="btn btn-ghost back-btn" onclick="history.back()">← 返回</button>
+        <div class="profile-header">
+          <div class="avatar">${escapeHtml(u.username.slice(0, 1).toUpperCase())}</div>
+          <div class="info">
+            <h2>${escapeHtml(u.username)}</h2>
+            <p>加入于 ${escapeHtml((u.created_at || "").slice(0, 10))}</p>
+          </div>
+          ${followBtn}
+        </div>
+        <div class="profile-grid">
+          <div class="profile-card"><div class="profile-stat"><span>汤</span><span class="v">${st.soups}</span></div></div>
+          <div class="profile-card"><div class="profile-stat"><span>关注</span><span class="v">${st.following}</span></div></div>
+          <div class="profile-card"><div class="profile-stat"><span>粉丝</span><span class="v">${st.followers}</span></div></div>
+        </div>
+        <h2 class="section-title">TA 的汤</h2>
+        <div id="userSoups"></div>
+      </div>
+      <div id="modalRoot"></div>
+    </div>
+  `;
+  const list = data.soups || [];
+  const c = $("#userSoups");
+  if (!list.length) {
+    c.innerHTML = `<div class="empty"><div class="empty-icon">🍲</div><p>还没有发布的汤</p></div>`;
+  } else {
+    c.innerHTML = `<div class="grid" style="padding-bottom:28px">${list.map((s) => `
+      <article class="card" onclick="openSoup(${s.id})">
+        <span class="card-tag">${escapeHtml(s.season || "自制")}${s.episode ? " · " + escapeHtml(s.episode) : ""}</span>
+        <h3>${escapeHtml(s.title)}</h3>
+        <p>${escapeHtml(s.excerpt || "")}</p>
+      </article>
+    `).join("")}</div>`;
+  }
+}
+
+window.toggleFollow = async (uid) => {
+  if (!store.user) { location.hash = "#/auth"; return; }
+  const btn = $("#followBtn");
+  if (!btn) return;
+  if (btn.textContent.includes("已关注")) {
+    const { ok, data } = await API.del(`/api/follow/${uid}`);
+    if (!ok) { toast(data.error || "操作失败", "err"); return; }
+    btn.textContent = "+ 关注";
+    btn.className = "btn btn-primary";
+    toast("已取关", "ok");
+  } else {
+    const { ok, data } = await API.post(`/api/follow/${uid}`, {});
+    if (!ok) { toast(data.error || "操作失败", "err"); return; }
+    btn.textContent = "已关注";
+    btn.className = "btn btn-ghost";
+    toast("已关注", "ok");
+  }
+};
+
 // ---------- 详情页 + 单人 AI ----------
 async function openSoup(id) {
   // 改为独立路由全屏页面，浏览器后退也能返回
@@ -468,12 +624,21 @@ async function renderSoupPage(id) {
     return;
   }
   store.selected = data;
+  // 自制汤且非自己且已登录：取关注状态供作者区按钮初始显示
+  if (data.author_id && store.user && store.user.id !== data.author_id) {
+    const fr = await API.json(`/api/follow/${data.author_id}`);
+    if (fr.ok) data._following = !!fr.data.following;
+  }
   renderSoupPageContent(data);
 }
 
 function renderSoupPageContent(soup) {
   const hist = store.aiHistory[soup.id] || [];
   const keyOk = KeyMgr.has();
+  // 作者区关注按钮：仅自制汤、已登录、非自己时显示
+  const authorFollowBtn = (soup.author_id && store.user && store.user.id !== soup.author_id)
+    ? `<button class="btn ${soup._following ? "btn-ghost" : "btn-primary"}" id="followBtn" onclick="toggleFollow(${soup.author_id})">${soup._following ? "已关注" : "+ 关注"}</button>`
+    : "";
 
   // 空汤面/汤底的友好提示
   const hasSurface = !!(soup.surface && soup.surface.trim());
@@ -498,6 +663,12 @@ function renderSoupPageContent(soup) {
           <span class="card-tag">${escapeHtml(soup.season)}${soup.episode ? " · " + escapeHtml(soup.episode) : ""}</span>
           <h1 class="soup-detail-title">${escapeHtml(soup.title)}</h1>
           <div class="modal-meta">${escapeHtml(soup.filename)}</div>
+        </div>
+
+        <div class="soup-author">
+          ${soup.author_id
+            ? `作者：<a href="#/user/${soup.author_id}" class="author-link">${escapeHtml(soup.author_username || "匿名")}</a> ${authorFollowBtn}`
+            : `<span class="author-official">作者：许二木</span>`}
         </div>
 
         <div class="section-label">汤面</div>
@@ -602,16 +773,20 @@ window.deleteComment = async (soupId, commentId) => {
 };
 
 window.openSoupEditor = async (soupId) => {
-  const { ok, data } = await API.json(`/api/soups/${soupId}`);
-  if (!ok) { toast(data.error || "加载失败", "err"); return; }
-  const draftKey = `soup_draft_${soupId}`;
-  const draft = JSON.parse(localStorage.getItem(draftKey) || "null");
-  const soup = draft || data;
+  const isNew = !soupId;
+  let soup = { title: '', season: '', episode: '', surface: '', base: '', host_manual: '', extra: '', images: [] };
+  if (!isNew) {
+    const { ok, data } = await API.json(`/api/soups/${soupId}`);
+    if (!ok) { toast(data.error || "加载失败", "err"); return; }
+    const draftKey = `soup_draft_${soupId}`;
+    const draft = JSON.parse(localStorage.getItem(draftKey) || "null");
+    soup = draft || data;
+  }
   const root = $("#modalRoot");
   root.innerHTML = `
     <div class="overlay open" onclick="closeModal(event)"></div>
     <div class="modal open" style="max-width:900px">
-      <div class="modal-header"><div><h2 class="modal-title">编辑汤题</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-header"><div><h2 class="modal-title">${isNew ? "✍️ 写一碗汤" : "编辑汤题"}</h2>${isNew ? '<p style="color:var(--text-3);font-size:0.85rem;margin:4px 0 0">投稿后需管理员审核通过才会在广场展示</p>' : ''}</div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
       <div class="modal-body" style="max-height:70vh;overflow-y:auto">
         <div class="field"><label>标题</label><input class="input" id="ed_title" value="${escapeHtml(soup.title || '')}" oninput="previewSoupEdit()" /></div>
         <div class="admin-row">
@@ -623,31 +798,53 @@ window.openSoupEditor = async (soupId) => {
           <button class="editor-tab" onclick="switchEditorTab('base',this)">汤底</button>
           <button class="editor-tab" onclick="switchEditorTab('host_manual',this)">主持人手册</button>
           <button class="editor-tab" onclick="switchEditorTab('extra',this)">其他内容</button>
-          <button class="editor-tab" onclick="switchEditorTab('images',this)">配图</button>
+          ${isNew ? '' : `<button class="editor-tab" onclick="switchEditorTab('images',this)">配图</button>`}
         </div>
         <div class="editor-layout">
           <textarea class="input editor-textarea" id="ed_surface" rows="10" placeholder="汤面内容…" oninput="previewSoupEdit()">${escapeHtml(soup.surface || '')}</textarea>
           <textarea class="input editor-textarea" id="ed_base" rows="10" placeholder="汤底内容…" style="display:none" oninput="previewSoupEdit()">${escapeHtml(soup.base || '')}</textarea>
           <textarea class="input editor-textarea" id="ed_host_manual" rows="10" placeholder="主持人手册…" style="display:none" oninput="previewSoupEdit()">${escapeHtml(soup.host_manual || '')}</textarea>
           <textarea class="input editor-textarea" id="ed_extra" rows="10" placeholder="其他内容…" style="display:none" oninput="previewSoupEdit()">${escapeHtml(soup.extra || '')}</textarea>
-          <div id="ed_images" style="display:none">
+          ${isNew ? '' : `<div id="ed_images" style="display:none">
             <div id="imageList">${(soup.images || []).map((img, i) => `<div class="img-item"><img src="/soups-img/${escapeHtml(img)}" style="max-width:120px;max-height:80px;border-radius:4px" /><button class="admin-act-btn danger" onclick="deleteSoupImage(${soupId},${i})">删除</button></div>`).join("")}</div>
             ${(soup.images || []).length < 5 ? `<label class="btn btn-secondary" style="cursor:pointer;margin-top:8px">上传图片<input type="file" accept="image/*" style="display:none" onchange="uploadSoupImage(${soupId},this)" /></label>` : "<p>已达5张上限</p>"}
-          </div>
+          </div>`}
           <div class="editor-preview md-body" id="edPreview">${renderMd(soup.surface || '')}</div>
         </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="closeModal(event)">取消</button>
-        <button class="btn btn-primary" onclick="saveSoupEdit(${soupId})">保存</button>
+        <button class="btn btn-primary" onclick="${isNew ? `saveSoupNew()` : `saveSoupEdit(${soupId})`}">${isNew ? "投稿" : "保存"}</button>
       </div>
     </div>
   `;
   document.body.style.overflow = "hidden";
-  setInterval(() => {
-    const d = { title: $("#ed_title")?.value, surface: $("#ed_surface")?.value, base: $("#ed_base")?.value, host_manual: $("#ed_host_manual")?.value, extra: $("#ed_extra")?.value, season: $("#ed_season")?.value, episode: $("#ed_episode")?.value };
-    localStorage.setItem(`soup_draft_${soupId}`, JSON.stringify(d));
-  }, 5000);
+  if (!isNew) {
+    setInterval(() => {
+      const d = { title: $("#ed_title")?.value, surface: $("#ed_surface")?.value, base: $("#ed_base")?.value, host_manual: $("#ed_host_manual")?.value, extra: $("#ed_extra")?.value, season: $("#ed_season")?.value, episode: $("#ed_episode")?.value };
+      localStorage.setItem(`soup_draft_${soupId}`, JSON.stringify(d));
+    }, 5000);
+  }
+};
+
+// 新建投稿：POST /api/soups
+window.saveSoupNew = async () => {
+  const body = {
+    title: $("#ed_title")?.value.trim() || "",
+    surface: $("#ed_surface")?.value || "",
+    base: $("#ed_base")?.value || "",
+    host_manual: $("#ed_host_manual")?.value || "",
+    extra: $("#ed_extra")?.value || "",
+    season: $("#ed_season")?.value || "",
+    episode: $("#ed_episode")?.value || "",
+  };
+  if (!body.title) { toast("标题不能为空", "err"); return; }
+  if (!body.surface) { toast("汤面不能为空", "err"); return; }
+  const { ok, data } = await API.post("/api/soups", body);
+  if (!ok) { toast(data.error || "投稿失败", "err"); return; }
+  toast("投稿成功，等待管理员审核后将在广场展示", "ok");
+  closeModal();
+  location.hash = "#/square";
 };
 
 let _editorCurrentTab = "surface";
@@ -1274,6 +1471,10 @@ async function renderProfile() {
             <h3>粉丝</h3>
             <div id="followersList"><div class="spinner" style="margin:8px auto"></div></div>
           </div>
+          <div class="profile-card my-submissions-card">
+            <h3>我的投稿</h3>
+            <div id="mySubmissions"><div class="spinner" style="margin:8px auto"></div></div>
+          </div>
         </div>
       </div>
       <div id="modalRoot"></div>
@@ -1281,6 +1482,7 @@ async function renderProfile() {
   `;
   loadFollowList("following");
   loadFollowList("followers");
+  loadMySubmissions();
 }
 
 async function loadFollowList(type) {
@@ -1292,6 +1494,44 @@ async function loadFollowList(type) {
     <div class="profile-stat"><span>${escapeHtml(u.username)}</span><span class="v">${type === "followers" && u.mutual ? "互关" : ""}</span></div>
   `).join("");
 }
+
+async function loadMySubmissions() {
+  const { ok, data } = await API.json("/api/soups/my");
+  const el = $("#mySubmissions");
+  if (!el) return;
+  if (!ok || !data.soups.length) {
+    el.innerHTML = `<p style="color:var(--text-3);margin:4px 0">还没有投稿。<a href="#/square" style="color:var(--accent)">去写第一碗</a></p>`;
+    return;
+  }
+  const statusMap = {
+    pending: { label: "待审核", cls: "pending" },
+    approved: { label: "已通过", cls: "approved" },
+    rejected: { label: "已拒绝", cls: "rejected" },
+  };
+  el.innerHTML = data.soups.map((s) => {
+    const st = statusMap[s.status] || { label: s.status, cls: "" };
+    return `<div class="submission-item">
+      <div class="submission-head">
+        <a href="#/soup/${s.id}" class="submission-title">${escapeHtml(s.title)}</a>
+        <span class="status-badge ${st.cls}">${st.label}</span>
+      </div>
+      ${s.status === "rejected" && s.reject_reason ? `<div class="reject-reason">拒绝原因：${escapeHtml(s.reject_reason)}</div>` : ""}
+      <div class="submission-meta">${escapeHtml(s.season || "自制")}${s.episode ? " · " + escapeHtml(s.episode) : ""} · ${escapeHtml((s.created_at || "").slice(0, 10))}</div>
+      <div class="submission-actions">
+        <button class="admin-act-btn" onclick="openSoupEditor(${s.id})">${s.status === "rejected" ? "编辑后重投" : "编辑"}</button>
+        <button class="admin-act-btn danger" onclick="deleteMySoup(${s.id})">删除</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+window.deleteMySoup = async (id) => {
+  if (!confirm("确认删除这碗汤？此操作不可撤销")) return;
+  const { ok, data } = await API.del(`/api/soups/${id}`);
+  if (!ok) { toast(data.error || "删除失败", "err"); return; }
+  toast("已删除", "ok");
+  loadMySubmissions();
+};
 
 window.doLogout = async () => {
   await API.post("/api/auth/logout", {});

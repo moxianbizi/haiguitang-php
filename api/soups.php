@@ -10,6 +10,7 @@ function handle_soups(array $segments) {
         return;
     }
     if ($action === 'seasons') { soups_seasons(); return; }
+    if ($action === 'my') { soups_my(); return; }
 
     $id = (int)$action;
     if ($id <= 0) json_error('Not Found', 404);
@@ -32,9 +33,17 @@ function soups_list() {
     $pdo = DB::pdo();
     $q = trim($_GET['q'] ?? '');
     $season = trim($_GET['season'] ?? '');
+    // source: official=官方汤库(author_id IS NULL), community=自制汤广场(author_id IS NOT NULL)
+    // 默认 official，保持首页行为不变
+    $source = $_GET['source'] ?? 'official';
+    if (!in_array($source, ['official', 'community', 'all'], true)) $source = 'official';
 
-    $sql = 'SELECT id, filename, season, episode, title, surface, substr(surface, 1, 80) AS excerpt FROM soups WHERE status = \'approved\'';
+    $where = ['status = \'approved\''];
     $params = [];
+    if ($source === 'official') $where[] = 'author_id IS NULL';
+    elseif ($source === 'community') $where[] = 'author_id IS NOT NULL';
+
+    $sql = 'SELECT soups.id, soups.filename, soups.season, soups.episode, soups.title, soups.surface, soups.author_id, u.username AS author_username, substr(soups.surface, 1, 80) AS excerpt FROM soups LEFT JOIN users u ON soups.author_id = u.id WHERE ' . implode(' AND ', $where);
     if ($season !== '') { $sql .= ' AND season = ?'; $params[] = $season; }
     if ($q !== '') {
         $sql .= ' AND (title LIKE ? OR surface LIKE ? OR season LIKE ?)';
@@ -42,12 +51,19 @@ function soups_list() {
         $params[] = "%$q%";
         $params[] = "%$q%";
     }
-    $sql .= ' ORDER BY sort_order, id';
+    // 官方汤保持原有目录顺序；自制汤按发布时间倒序（最新优先）
+    // JOIN users 后 id 列需带表名前缀，避免歧义
+    $order = $source === 'community' ? 'soups.id DESC' : 'sort_order, soups.id';
+    $sql .= ' ORDER BY ' . $order;
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $soups = $stmt->fetchAll();
 
-    $seasons = $pdo->query('SELECT DISTINCT season FROM soups ORDER BY season')->fetchAll(PDO::FETCH_COLUMN);
+    // seasons 也按 source 区分，避免官方页筛选项混入自制汤的系列
+    $seasonWhere = implode(' AND ', $where);
+    $seasons = $pdo->prepare('SELECT DISTINCT season FROM soups WHERE ' . $seasonWhere . ' ORDER BY season');
+    $seasons->execute();
+    $seasons = $seasons->fetchAll(PDO::FETCH_COLUMN);
 
     json_ok(['count' => count($soups), 'seasons' => $seasons, 'soups' => $soups]);
 }
@@ -58,9 +74,21 @@ function soups_seasons() {
     json_ok(['seasons' => $seasons]);
 }
 
+/**
+ * 我的投稿：当前用户查自己投的汤（含 pending/rejected，所有状态）
+ */
+function soups_my() {
+    $user = require_login();
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, status, reject_reason, created_at FROM soups WHERE author_id = ? ORDER BY id DESC');
+    $stmt->execute([$user['id']]);
+    $soups = $stmt->fetchAll();
+    json_ok(['count' => count($soups), 'soups' => $soups]);
+}
+
 function soups_detail(int $id) {
     $pdo = DB::pdo();
-    $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base, host_manual, extra, status, reject_reason, author_id FROM soups WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT soups.id, soups.filename, soups.season, soups.episode, soups.title, soups.surface, soups.base, soups.host_manual, soups.extra, soups.status, soups.reject_reason, soups.author_id, u.username AS author_username FROM soups LEFT JOIN users u ON soups.author_id = u.id WHERE soups.id = ?');
     $stmt->execute([$id]);
     $s = $stmt->fetch();
     if (!$s) json_error('未找到', 404);
@@ -194,7 +222,12 @@ function soups_update(int $id) {
     validate_length($s['season'], 50, '系列');
     validate_length($s['episode'], 50, '集数');
 
-    $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, host_manual=?, extra=?, season=?, episode=? WHERE id=?');
+    // 被拒绝的汤编辑后重新进入审核队列（status=pending，清空拒绝原因）
+    if (($s['status'] ?? '') === 'rejected') {
+        $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, host_manual=?, extra=?, season=?, episode=?, status=\'pending\', reject_reason=NULL WHERE id=?');
+    } else {
+        $stmt = $pdo->prepare('UPDATE soups SET title=?, surface=?, base=?, host_manual=?, extra=?, season=?, episode=? WHERE id=?');
+    }
     $stmt->execute([$s['title'], $s['surface'], $s['base'], $s['host_manual'], $s['extra'], $s['season'], $s['episode'], $id]);
 
     // 同步 MD
