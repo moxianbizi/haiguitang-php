@@ -274,10 +274,13 @@ function admin_soups_list() {
 
     $offset = ($page - 1) * $perPage;
     $limit = $perPage;
-    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT :offset, :limit");
-    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-    $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-    $stmt->execute($params);
+    // 统一用 ? 占位符，避免与搜索条件的 ? 混用命名参数导致 datatype mismatch
+    $stmt = $pdo->prepare("SELECT * $sql ORDER BY sort_order, id DESC LIMIT ?, ?");
+    $i = 1;
+    foreach ($params as $v) { $stmt->bindValue($i++, $v, PDO::PARAM_STR); }
+    $stmt->bindValue($i++, $offset, PDO::PARAM_INT);
+    $stmt->bindValue($i++, $limit, PDO::PARAM_INT);
+    $stmt->execute();
     $soups = $stmt->fetchAll();
 
     json_ok([
