@@ -291,15 +291,15 @@ async function renderHome() {
     <div class="page">
       ${headerHtml("home")}
       <section class="hero container">
-        <div class="hero-badge">🍲 悬疑推理收录站</div>
+        <div class="hero-badge">悬疑推理 · 汤面与汤底</div>
         <h1>海龟汤馆</h1>
-        <p>每碗汤都是一段离奇的故事。先看汤面，细品线索，再揭开汤底；也可让 AI 当主持人，回答你的提问。</p>
-        <div class="curator">整理人：长安</div>
+        <p>看汤面，问线索，揭汤底。收录的每一碗汤都可单独让 AI 主持对答。</p>
+        <div class="curator">整理人 · 长安</div>
         <div class="search-box">
           <span class="search-icon">🔍</span>
           <input type="text" id="searchInput" placeholder="搜索标题、汤面或系列…" value="${escapeHtml(store.search)}" />
         </div>
-        ${store.user ? `<div style="margin-top:18px"><button class="btn btn-primary" onclick="openSoupEditor()">✍️ 写一碗汤</button></div>` : `<p style="margin-top:18px;color:var(--text-3);font-size:0.9rem">想自己写汤？<a href="#/auth" style="color:var(--accent)">登录</a>后即可投稿，或去<a href="#/square" style="color:var(--accent)">自制汤广场</a>逛逛</p>`}
+        ${store.user ? `<div style="margin-top:20px"><button class="btn btn-primary" onclick="openSoupEditor()">写一碗汤</button></div>` : `<p style="margin-top:20px;color:var(--text-3);font-size:0.85rem"><a href="#/auth" style="color:var(--accent)">登录</a> 后可投稿 · <a href="#/square" style="color:var(--accent)">自制汤广场</a></p>`}
       </section>
       <div class="stats-bar container" id="statsBar">
         <div class="stat"><strong>${store.soups.length}</strong>收录汤数</div>
@@ -443,16 +443,16 @@ async function renderSquare() {
     <div class="page">
       ${headerHtml("square")}
       <section class="hero container">
-        <div class="hero-badge">🌐 社区创作</div>
+        <div class="hero-badge">社区创作 · 自制汤</div>
         <h1>自制汤广场</h1>
-        <p>这里收录社区玩家自己写的海龟汤。想动手写一碗？登录后投稿，经管理员审核通过即在此展示。</p>
+        <p>社区玩家写的海龟汤。登录后投稿，经审核通过即在此展示。</p>
         <div class="search-box">
           <span class="search-icon">🔍</span>
           <input type="text" id="squareSearchInput" placeholder="搜索标题或汤面…" value="${escapeHtml(q0)}" />
         </div>
         ${store.user
-          ? `<div style="margin-top:18px"><button class="btn btn-primary" onclick="openSoupEditor()">✍️ 写一碗汤</button></div>`
-          : `<p style="margin-top:18px;color:var(--text-3);font-size:0.9rem">想投稿？<a href="#/auth" style="color:var(--accent)">登录</a>后即可写汤</p>`}
+          ? `<div style="margin-top:20px"><button class="btn btn-primary" onclick="openSoupEditor()">写一碗汤</button></div>`
+          : `<p style="margin-top:20px;color:var(--text-3);font-size:0.85rem"><a href="#/auth" style="color:var(--accent)">登录</a> 后可投稿</p>`}
       </section>
       <div class="stats-bar container" id="squareStats"><div class="stat"><strong>…</strong>自制汤数</div></div>
       <div id="squareContent">${renderSkeletonGrid()}</div>
