@@ -15,6 +15,7 @@ function handle_rooms(array $segments) {
 
     if ($_SERVER['REQUEST_METHOD'] === 'GET' && $sub === '') { require_login(); rooms_get($code); }
     elseif ($_SERVER['REQUEST_METHOD'] === 'DELETE' && $sub === '') rooms_close($code);
+    elseif ($sub === 'dissolve' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_dissolve($code);
     elseif ($sub === 'select-soup' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_select_soup($code);
     elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_send_message($code);
     elseif ($sub === 'ai-question' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_ai_question($code);
@@ -113,6 +114,35 @@ function rooms_close(string $code) {
     $stmt = $pdo->prepare("UPDATE rooms SET status = 'ended' WHERE code = ?");
     $stmt->execute([$code]);
     json_ok(['msg' => '已关闭']);
+}
+
+/**
+ * 解散房间：房主永久删除房间及其所有消息（不可恢复）。
+ * 与 rooms_close（仅标记 status='ended'，保留数据）的区别：
+ *   - close: 软关闭，房间仍在列表/后台可见，可恢复
+ *   - dissolve: 硬删除，房间和消息从数据库清除
+ * messages 表 ON DELETE CASCADE 会自动清理消息。
+ */
+function rooms_dissolve(string $code) {
+    $user = require_login();
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT * FROM rooms WHERE code = ?');
+    $stmt->execute([$code]);
+    $r = $stmt->fetch();
+    if (!$r) json_error('房间不存在', 404);
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以解散房间', 403);
+
+    $pdo->beginTransaction();
+    try {
+        // messages 表有 ON DELETE CASCADE，删除 room 会自动删除其所有消息
+        $stmt = $pdo->prepare('DELETE FROM rooms WHERE id = ?');
+        $stmt->execute([(int)$r['id']]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        json_error('解散房间失败：' . $e->getMessage(), 500);
+    }
+    json_ok(['msg' => '房间已解散']);
 }
 
 function rooms_select_soup(string $code) {

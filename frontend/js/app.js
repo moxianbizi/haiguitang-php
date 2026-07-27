@@ -1075,6 +1075,13 @@ async function renderRoom(code) {
               ${!KeyMgr.has() && room.ai_enabled ? '<br><span class="warn">提示：AI 已启用但你还没填 DeepSeek Key（右上角 ⚙）</span>' : ""}
             </p>
           </div>
+          ${room.host?.id === store.user?.id ? `
+          <div class="side-card">
+            <h4>房间管理</h4>
+            <p class="ai-hint" style="margin:0 0 10px">房主可结束或解散当前房间。</p>
+            ${room.status !== "ended" ? `<button class="btn btn-secondary" style="width:100%;margin-bottom:8px" onclick="closeRoom('${escapeJs(room.code)}')">结束房间（保留记录）</button>` : ""}
+            <button class="btn btn-danger" style="width:100%" onclick="dissolveRoom('${escapeJs(room.code)}')">解散房间（永久删除）</button>
+          </div>` : ""}
         </div>
       </div>
       <div id="modalRoot"></div>
@@ -1171,6 +1178,27 @@ window.sendAiQuestion = async () => {
   });
   if (!ok) { toast(data.error || "提问失败", "err"); return; }
   if (data.error) toast(data.error, "err");
+};
+
+// 房主结束房间（软关闭，保留记录，可恢复）
+window.closeRoom = async (code) => {
+  if (!confirm("确认结束房间？\n结束后无法继续发言，但房间记录会保留。")) return;
+  const { ok, data } = await API.del(`/api/rooms/${code}`);
+  if (!ok) { toast(data.error || "结束失败", "err"); return; }
+  toast("房间已结束", "ok");
+  location.hash = "#/rooms";
+  roomsList();
+};
+
+// 房主解散房间（硬删除，永久清除房间与所有消息，不可恢复）
+window.dissolveRoom = async (code) => {
+  if (!confirm("⚠️ 确认解散房间？\n\n房间及所有消息将被永久删除，不可恢复！")) return;
+  if (!confirm("再次确认：此操作无法撤销，确定要解散吗？")) return;
+  const { ok, data } = await API.post(`/api/rooms/${code}/dissolve`, {});
+  if (!ok) { toast(data.error || "解散失败", "err"); return; }
+  toast("房间已解散", "ok");
+  location.hash = "#/rooms";
+  roomsList();
 };
 
 window.pickSoupForRoomUpdate = (code) => {
