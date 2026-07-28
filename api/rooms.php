@@ -20,6 +20,11 @@ function handle_rooms(array $segments) {
     elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_send_message($code);
     elseif ($sub === 'ai-question' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_ai_question($code);
     elseif ($sub === 'ai-key' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_set_ai_key($code);
+    // 真人主持模式：玩家向主持人提问 + 房主回答
+    elseif ($sub === 'host-question' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_host_question($code);
+    elseif ($sub === 'host-answer' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_host_answer($code);
+    // 房主手动标记关键节点命中（真人主持模式）
+    elseif ($sub === 'hit-node' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_hit_node($code);
     elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'GET') { require_login(); rooms_poll_messages($code); }
     else json_error('Not Found', 404);
 }
@@ -36,6 +41,9 @@ function rooms_create() {
     $member_limit = max(0, (int)($data['member_limit'] ?? 0));
     if ($member_limit > 0 && $member_limit < 2) $member_limit = 2;
 
+    // 初始化房间状态机（关键节点机制所有汤都启用）
+    $state = rooms_init_state($soup_id ? (int)$soup_id : 0);
+
     $pdo = DB::pdo();
     $code = gen_room_code();
     while (true) {
@@ -45,15 +53,78 @@ function rooms_create() {
         $code = gen_room_code();
     }
 
-    $stmt = $pdo->prepare('INSERT INTO rooms (code, host_id, soup_id, ai_enabled, ai_question_limit, member_limit, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    $stmt->execute([$code, $user['id'], $soup_id ? (int)$soup_id : null, $ai_enabled ? 1 : 0, $ai_question_limit, $member_limit, 'playing']);
+    $stmt = $pdo->prepare('INSERT INTO rooms (code, host_id, soup_id, ai_enabled, ai_question_limit, member_limit, status, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$code, $user['id'], $soup_id ? (int)$soup_id : null, $ai_enabled ? 1 : 0, $ai_question_limit, $member_limit, 'playing', json_encode($state, JSON_UNESCAPED_UNICODE)]);
     $id = (int)$pdo->lastInsertId();
 
     // 系统消息
     $stmt = $pdo->prepare('INSERT INTO messages (room_id, msg_type, content) VALUES (?, ?, ?)');
-    $stmt->execute([$id, 'system', '房间已创建，开始游戏吧！']);
+    $sysMsg = $ai_enabled ? '房间已创建，AI 主持人已就位，开始游戏吧！' : '房间已创建（真人主持模式），房主担任主持人，开始游戏吧！';
+    $stmt->execute([$id, 'system', $sysMsg]);
 
     rooms_get($code, 201);
+}
+
+/**
+ * 初始化普通房间状态机：关键节点机制（所有汤都启用）
+ * - 若汤的 extra 中有【关键节点】段 → 用作者预定义
+ * - 否则 → 空数组，AI 首次回答自行拆分
+ */
+function rooms_init_state(int $soupId): array {
+    $keyNodes = [];
+    if ($soupId > 0) {
+        $pdo = DB::pdo();
+        $stmt = $pdo->prepare('SELECT extra FROM soups WHERE id = ?');
+        $stmt->execute([$soupId]);
+        $row = $stmt->fetch();
+        if ($row && !empty($row['extra'])) {
+            $keyNodes = rooms_parse_key_nodes($row['extra']);
+        }
+    }
+    return [
+        'key_nodes' => array_map(fn($n) => ['name' => $n, 'hit' => false], $keyNodes),
+        'cleared'   => false,
+        'ask_count' => 0,
+    ];
+}
+
+/**
+ * 从 extra/host_manual 文本中解析【关键节点】段
+ * 与 lzcxroom.php 的解析逻辑一致，独立一份避免 require 依赖。
+ */
+function rooms_parse_key_nodes(string $text): array {
+    $nodes = [];
+    if (preg_match('/【?关键节点】?\s*[：:]\s*\n([\s\S]*?)(?=\n【|\n关键节点|\n规则|\n任务|\n幻灵|\n残响|\n收容|\Z)/u', $text, $km)) {
+        $lines = explode("\n", $km[1]);
+        foreach ($lines as $line) {
+            $t = trim($line);
+            if ($t === '') continue;
+            $t = preg_replace('/^[*\-]?\s*\d+[.、)]\s*/u', '', $t);
+            $t = trim($t, " *　");
+            if ($t !== '' && mb_strlen($t) <= 60) $nodes[] = $t;
+        }
+        $nodes = array_values(array_unique($nodes));
+    }
+    return $nodes;
+}
+
+/** 安全读取普通房间 state */
+function rooms_load_state(array $room): array {
+    $s = json_decode($room['state'] ?? '{}', true);
+    if (!is_array($s)) $s = [];
+    $s += [
+        'key_nodes' => [],
+        'cleared'   => false,
+        'ask_count' => 0,
+    ];
+    return $s;
+}
+
+/** 写回 state */
+function rooms_save_state(int $roomId, array $state): void {
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('UPDATE rooms SET state = ? WHERE id = ?');
+    $stmt->execute([json_encode($state, JSON_UNESCAPED_UNICODE), $roomId]);
 }
 
 function rooms_list() {
@@ -68,6 +139,7 @@ function rooms_list() {
 }
 
 function rooms_get(string $code, int $status = 200) {
+    $user = current_user();
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT r.*, u.username AS host_name FROM rooms r LEFT JOIN users u ON r.host_id = u.id WHERE r.code = ?');
     $stmt->execute([$code]);
@@ -75,10 +147,17 @@ function rooms_get(string $code, int $status = 200) {
     if (!$r) json_error('房间不存在', 404);
 
     $room = room_to_dict($r);
+    $room['state'] = rooms_load_state($r);
 
     $soup = null;
     if ($r['soup_id']) {
-        $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface FROM soups WHERE id = ?');
+        // 真人主持模式：房主能看到汤底（base/host_manual/extra），玩家只看汤面
+        $isHost = $user && (int)$r['host_id'] === (int)$user['id'];
+        if ($isHost) {
+            $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base, host_manual, extra FROM soups WHERE id = ?');
+        } else {
+            $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface FROM soups WHERE id = ?');
+        }
         $stmt->execute([$r['soup_id']]);
         $soup = $stmt->fetch();
     }
@@ -256,6 +335,10 @@ function rooms_ai_question(string $code) {
         ]);
     }
 
+    // 关键节点状态（所有汤都启用）
+    $state = rooms_load_state($r);
+    $keyNodes = array_key_exists('key_nodes', $state) ? $state['key_nodes'] : null;
+
     try {
         $answer = ask_ai(
             $soup['surface'] ?: '',
@@ -266,7 +349,8 @@ function rooms_ai_question(string $code) {
             $soup['extra'] ?? '',
             $provider,
             $ai_base_url,
-            $ai_model
+            $ai_model,
+            $keyNodes
         );
     } catch (AIError $e) {
         json_ok([
@@ -276,12 +360,67 @@ function rooms_ai_question(string $code) {
             'code' => $e->aiCode,
         ]);
     }
+
+    // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点状态 =====
+    $justCleared = false;
+    $newHits = [];
+    if ($keyNodes !== null) {
+        // NODES 标记（AI 自拆节点）
+        if (empty($state['key_nodes']) && preg_match('/<<<NODES:([^>]+?)>>>/u', $answer, $nm)) {
+            $names = array_filter(array_map('trim', explode('|', $nm[1])));
+            $names = array_values(array_unique($names));
+            if (count($names) >= 3) {
+                $state['key_nodes'] = array_map(fn($n) => ['name' => $n, 'hit' => false], $names);
+            }
+            $answer = str_replace($nm[0], '', $answer);
+        }
+        // HIT 标记
+        if (preg_match('/<<<HIT:([^>]+?)>>>/u', $answer, $hm)) {
+            $hitName = trim($hm[1]);
+            foreach (($state['key_nodes'] ?? []) as &$node) {
+                if (!$node['hit'] && $node['name'] === $hitName) {
+                    $node['hit'] = true;
+                    $newHits[] = $hitName;
+                    break;
+                }
+            }
+            unset($node);
+            $answer = str_replace($hm[0], '', $answer);
+            $answer = preg_replace('/<<<HIT:[^>]*?>>>/u', '', $answer);
+        }
+        $answer = trim($answer);
+        // 通关判定
+        $nodes = $state['key_nodes'] ?? [];
+        if (!empty($nodes) && empty($state['cleared'])) {
+            $total = count($nodes);
+            $hitCount = count(array_filter($nodes, fn($n) => !empty($n['hit'])));
+            if ($total > 0 && ($hitCount / $total) >= 0.85) {
+                $state['cleared'] = true;
+                $justCleared = true;
+            }
+        }
+    }
+
     // AI 调用成功后再递增提问计数（避免失败时白扣次数）
+    $state['ask_count'] = (int)($state['ask_count'] ?? 0) + 1;
+    rooms_save_state((int)$r['id'], $state);
     $pdo->exec('UPDATE rooms SET ai_question_count = ai_question_count + 1 WHERE id = ' . (int)$r['id']);
     $a_msg = save_message($r['id'], null, 'ai_answer', $answer);
+
+    if (!empty($newHits)) {
+        save_message($r['id'], null, 'system', '🎯 命中关键节点：' . implode('、', $newHits));
+    }
+    if ($justCleared) {
+        $nodes = $state['key_nodes'] ?? [];
+        $total = count($nodes);
+        $hitCount = count(array_filter($nodes, fn($n) => !empty($n['hit'])));
+        save_message($r['id'], null, 'system', "🏆 通关！已盘出 {$hitCount}/{$total} 个关键节点（≥85%），真相大白！");
+    }
+
     json_ok([
         'question' => message_to_dict($q_msg),
         'answer' => message_to_dict($a_msg),
+        'state' => $state,
     ]);
 }
 
@@ -357,6 +496,132 @@ function rooms_decode_host_key(?string $cipher): array {
         ];
     }
     return [$raw, 'deepseek', '', ''];
+}
+
+// ===================== 真人主持模式 =====================
+
+/**
+ * 玩家向主持人提问（真人主持模式，ai_enabled=false 时用）
+ * 消息类型 'host_question'，房主在主持人面板看到并回答。
+ */
+function rooms_host_question(string $code) {
+    $user = require_login();
+    $data = body_json();
+    $content = trim($data['content'] ?? '');
+    if ($content === '') json_error('问题不能为空');
+    validate_length($content, 500, '问题内容');
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT * FROM rooms WHERE code = ?');
+    $stmt->execute([$code]);
+    $r = $stmt->fetch();
+    if (!$r) json_error('房间不存在', 404);
+    if ($r['status'] !== 'playing') json_error('房间已结束');
+    if (!$r['soup_id']) json_error('房间里还没有选汤');
+    if ($r['ai_enabled']) json_error('本房间启用的是 AI 主持人，请用 AI 提问');
+    if (!is_room_member($r, $user)) json_error('您不是该房间成员', 403);
+    // 房主自己不能向主持人提问（自己就是主持人）
+    if ((int)$r['host_id'] === (int)$user['id']) json_error('你是房主（主持人），无需向自己提问');
+
+    if (!rate_limit("msg_room_{$r['id']}_user_{$user['id']}", Config::$RATE_LIMIT_MSG_SEND, 60)) {
+        json_error('发送消息过于频繁，请稍后再试', 429);
+    }
+
+    $msg = save_message($r['id'], $user, 'host_question', $content);
+    json_ok(['message' => message_to_dict($msg)]);
+}
+
+/**
+ * 房主（主持人）回答玩家提问（真人主持模式）
+ * answer 预设：是/否/无关/恭喜猜中，或自定义文本。
+ */
+function rooms_host_answer(string $code) {
+    $user = require_login();
+    $data = body_json();
+    $answer = trim($data['answer'] ?? '');
+    if ($answer === '') json_error('回答不能为空');
+    validate_length($answer, 500, '回答内容');
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT * FROM rooms WHERE code = ?');
+    $stmt->execute([$code]);
+    $r = $stmt->fetch();
+    if (!$r) json_error('房间不存在', 404);
+    if ($r['status'] !== 'playing') json_error('房间已结束');
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主（主持人）可以回答', 403);
+    if ($r['ai_enabled']) json_error('本房间启用的是 AI 主持人');
+
+    // 房主回答消息
+    $msg = save_message($r['id'], $user, 'host_answer', $answer);
+
+    // 若回答是"恭喜猜中"类，自动标记通关
+    $state = rooms_load_state($r);
+    $justCleared = false;
+    if (!$state['cleared'] && preg_match('/(恭喜|猜中|通关|正确|答对)/u', $answer)) {
+        $state['cleared'] = true;
+        $justCleared = true;
+        rooms_save_state((int)$r['id'], $state);
+        save_message($r['id'], null, 'system', '🏆 主持人判定通关，真相大白！');
+    }
+
+    json_ok([
+        'message' => message_to_dict($msg),
+        'state' => $state,
+        'cleared' => $justCleared,
+    ]);
+}
+
+/**
+ * 房主手动标记/取消标记关键节点命中（真人主持模式，房主自行判定）
+ * body: { node: 节点名, hit: true/false }
+ */
+function rooms_hit_node(string $code) {
+    $user = require_login();
+    $data = body_json();
+    $nodeName = trim($data['node'] ?? '');
+    $hit = (bool)($data['hit'] ?? true);
+    if ($nodeName === '') json_error('节点名不能为空');
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT * FROM rooms WHERE code = ?');
+    $stmt->execute([$code]);
+    $r = $stmt->fetch();
+    if (!$r) json_error('房间不存在', 404);
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以标记节点', 403);
+
+    $state = rooms_load_state($r);
+    $found = false;
+    foreach (($state['key_nodes'] ?? []) as &$node) {
+        if ($node['name'] === $nodeName) {
+            $node['hit'] = $hit;
+            $found = true;
+            break;
+        }
+    }
+    unset($node);
+    if (!$found) json_error('节点不存在');
+
+    // 通关判定
+    $justCleared = false;
+    $nodes = $state['key_nodes'] ?? [];
+    $total = count($nodes);
+    $hitCount = count(array_filter($nodes, fn($n) => !empty($n['hit'])));
+    if ($total > 0 && ($hitCount / $total) >= 0.85 && empty($state['cleared'])) {
+        $state['cleared'] = true;
+        $justCleared = true;
+    }
+    rooms_save_state((int)$r['id'], $state);
+
+    if ($hit) {
+        save_message($r['id'], null, 'system', '🎯 命中关键节点：' . $nodeName);
+    } else {
+        save_message($r['id'], null, 'system', '↩ 取消节点命中：' . $nodeName);
+    }
+    if ($justCleared) {
+        save_message($r['id'], null, 'system', "🏆 通关！已盘出 {$hitCount}/{$total} 个关键节点（≥85%），真相大白！");
+    }
+
+    json_ok(['state' => $state, 'cleared' => $justCleared]);
 }
 
 // ===================== 辅助 =====================

@@ -2643,3 +2643,88 @@ input, textarea {
   color: var(--danger);
   border: 1px solid rgba(217, 113, 104, 0.25);
 }
+
+/* ===== 真人主持模式 · 主持人面板 ===== */
+.host-panel {
+  border-color: rgba(217, 166, 74, 0.3);
+  background: linear-gradient(180deg, rgba(217, 166, 74, 0.05), var(--card));
+}
+.host-base {
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px dashed rgba(217, 166, 74, 0.25);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.host-base-label {
+  font-size: 0.75rem;
+  color: var(--text-3);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.host-base-text {
+  font-size: 0.85rem;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.host-answer-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.host-answer-btns .btn {
+  flex: 1 1 auto;
+  min-width: 56px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
+/* ===== 关键节点列表 ===== */
+.node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.node-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.12);
+  font-size: 0.85rem;
+}
+.node-item.hit {
+  background: rgba(138, 168, 114, 0.12);
+}
+.node-name {
+  flex: 1;
+  word-break: break-word;
+}
+.node-toggle {
+  border: none;
+  background: rgba(200, 180, 150, 0.15);
+  color: var(--text-2);
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.node-toggle:hover {
+  background: rgba(200, 180, 150, 0.3);
+}
+
+/* 主持人问答消息样式 */
+.msg.host_question .bubble {
+  background: rgba(217, 166, 74, 0.12);
+  border: 1px solid rgba(217, 166, 74, 0.25);
+}
+.msg.host_answer .bubble {
+  background: rgba(138, 168, 114, 0.15);
+  border: 1px solid rgba(138, 168, 114, 0.3);
+  font-weight: 600;
+}

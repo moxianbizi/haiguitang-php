@@ -179,9 +179,10 @@ class AIError extends Exception {
  * @param string      $api_key    用户提供的 DeepSeek Key
  * @param string      $hostManual 主持人手册（可选，含特殊玩法指令）
  * @param string      $extra      其他内容（隐藏规则/解析/碎片等，可选）
+ * @param array|null  $keyNodes   关键节点状态：[['name'=>str,'hit'=>bool],...]；null=不启用；[]=待 AI 自拆
  * @return string AI 回答
  */
-function ask_ai(string $surface, string $base, string $question, string $api_key, string $hostManual = '', string $extra = '', string $provider = 'deepseek', string $baseUrl = '', string $model = ''): string {
+function ask_ai(string $surface, string $base, string $question, string $api_key, string $hostManual = '', string $extra = '', string $provider = 'deepseek', string $baseUrl = '', string $model = '', ?array $keyNodes = null): string {
     $api_key = trim($api_key);
     if ($api_key === '') {
         throw new AIError('未提供 API Key，请在页面设置中填写。', 'missing_key');
@@ -236,10 +237,34 @@ function ask_ai(string $surface, string $base, string $question, string $api_key
     }
     $user_content .= "\n\n玩家提问：{$question}";
 
+    // 系统提示词：基础 + 关键节点协议注入（若启用）
+    $systemPrompt = AI_SYSTEM_PROMPT;
+    if ($keyNodes !== null) {
+        $nodeExtra = "\n\n============================================================\n";
+        $nodeExtra .= "【关键节点协议 · 本局已启用】\n";
+        $nodeExtra .= "============================================================\n";
+        if (empty($keyNodes)) {
+            $nodeExtra .= "本局尚未提供关键节点列表。请在**首次回答**的末尾按系统提示词【8.1】协议输出 <<<NODES:节点1|节点2|...>>> 标记，自行拆分 6-10 个关键节点。\n";
+            $nodeExtra .= "拆分后，后续回答按 <<<HIT:节点名>>> 协议判定命中。\n";
+        } else {
+            $nodeExtra .= "本局关键节点列表如下（共 " . count($keyNodes) . " 个）：\n";
+            foreach ($keyNodes as $i => $n) {
+                $idx = $i + 1;
+                $hitMark = !empty($n['hit']) ? '✅已命中' : '⬜未命中';
+                $nodeExtra .= "{$idx}. {$n['name']}  [{$hitMark}]\n";
+            }
+            $nodeExtra .= "\n- 仅对「未命中」的节点判定是否被玩家本次提问触及。\n";
+            $nodeExtra .= "- 若命中，在回答末尾追加 <<<HIT:节点名>>>（节点名与上方列表字面一致）。\n";
+            $nodeExtra .= "- 已命中的节点不要再次标记。\n";
+            $nodeExtra .= "- 玩家通关条件：命中节点数 / 总节点数 ≥ 85%（后端自动判定，你只需如实标记）。\n";
+        }
+        $systemPrompt .= $nodeExtra;
+    }
+
     $payload = [
         'model' => $model,
         'messages' => [
-            ['role' => 'system', 'content' => AI_SYSTEM_PROMPT],
+            ['role' => 'system', 'content' => $systemPrompt],
             ['role' => 'user', 'content' => $user_content],
         ],
         // 手册触发内容（历史文献/动机/藏头诗/台词等）可能较长，留足空间

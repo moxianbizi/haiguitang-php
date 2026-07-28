@@ -1207,9 +1207,10 @@ async function renderRooms() {
             <label>选择一碗汤（可不选，进入后再选）</label>
             <input class="input" id="newRoomSoup" placeholder="点击选择汤" readonly onclick="pickSoupForRoom()" />
           </div>
-          <label style="display:flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--text-2);margin-bottom:14px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--text-2);margin-bottom:6px">
             <input type="checkbox" id="newRoomAi" checked /> 启用 AI 主持人
           </label>
+          <p class="ai-hint" style="margin:0 0 14px;font-size:0.8rem">关闭则启用真人主持模式，房主担任主持人（可看汤底、回答问题）。</p>
           <div class="field">
             <label>AI 提问次数上限（0 = 无限）</label>
             <input class="input" id="newRoomAiLimit" type="number" min="0" max="999" value="0" placeholder="0 = 无限" />
@@ -1219,7 +1220,7 @@ async function renderRooms() {
             <input class="input" id="newRoomMemberLimit" type="number" min="0" max="99" value="0" placeholder="0 = 无限" />
           </div>
           <button class="btn btn-primary" style="width:100%" onclick="createRoom()">创建房间</button>
-          <p class="ai-hint" style="margin-top:10px">提示：创建后房主可在房间侧栏绑定 AI Key，房间全员共用，无需各自配置。</p>
+          <p class="ai-hint" style="margin-top:10px">提示：AI 模式下房主可在房间侧栏绑定 AI Key（全员共用）；真人主持模式下房主直接回答玩家提问。</p>
         </div>
         <h3 class="section-title" style="margin-top:32px">进行中的房间</h3>
         <div id="roomList"><div class="empty"><div class="spinner"></div></div></div>
@@ -1333,7 +1334,7 @@ async function renderRoom(code) {
           <div class="chat-header">
             <div>
               <div class="chat-title">${escapeHtml(room.code)}</div>
-              <div class="chat-code">${room.ai_enabled ? "AI 主持人已启用" : "无 AI"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}</div>
+              <div class="chat-code">${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}${room.state?.cleared ? " · 已通关" : ""}</div>
             </div>
             <button class="btn-icon" onclick="location.hash='#/rooms'" title="离开">←</button>
           </div>
@@ -1342,7 +1343,12 @@ async function renderRoom(code) {
           <div class="chat-input">
             <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendChat()" ${room.status === "ended" ? "disabled" : ""} />
             <button class="btn btn-secondary" onclick="sendChat()" title="发送" ${room.status === "ended" ? "disabled" : ""}>💬</button>
-            ${room.ai_enabled && room.status !== "ended" ? `<button class="btn btn-primary" onclick="sendAiQuestion()" title="向AI提问" ${room.status === "ended" || (room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit) ? "disabled" : ""}>🤖</button>` : ""}
+            ${room.status !== "ended" && room.ai_enabled
+              ? `<button class="btn btn-primary" onclick="sendAiQuestion()" title="向AI提问" ${room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit ? "disabled" : ""}>🤖</button>`
+              : ""}
+            ${room.status !== "ended" && !room.ai_enabled && room.host?.id !== store.user?.id
+              ? `<button class="btn btn-primary" onclick="sendHostQuestion()" title="向主持人提问">🙋</button>`
+              : ""}
           </div>
         </div>
         <div class="room-side">
@@ -1358,10 +1364,45 @@ async function renderRoom(code) {
           <div class="side-card">
             <h4>玩法</h4>
             <p class="ai-hint" style="margin:0">
-              看汤面 → 向 AI 提是非题 → AI 只答「是/否/无关」→ 猜出汤底。
-              ${room.host?.id === store.user?.id ? "你是房主，可换汤。" : ""}
+              ${room.ai_enabled
+                ? "看汤面 → 向 AI 提是非题 → AI 只答「是/否/无关」→ 猜出汤底。"
+                : "真人主持模式：向房主提问，房主回答「是/否/无关」。房主能看到汤底。"}
+              ${room.host?.id === store.user?.id ? " 你是房主" + (room.ai_enabled ? "，可换汤。" : "（主持人），可换汤、回答问题、标记节点。") : ""}
             </p>
           </div>
+          ${room.host?.id === store.user?.id && !room.ai_enabled && soup?.base ? `
+          <div class="side-card host-panel">
+            <h4>🎙 主持人面板</h4>
+            <div class="host-base">
+              <div class="host-base-label">汤底（仅你可见）</div>
+              <div class="host-base-text">${escapeHtml(soup.base || "")}</div>
+              ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
+            </div>
+            <div class="host-quick-answer">
+              <div class="host-base-label">快捷回答</div>
+              <div class="host-answer-btns">
+                <button class="btn btn-secondary" onclick="hostAnswer('是')">是</button>
+                <button class="btn btn-secondary" onclick="hostAnswer('否')">否</button>
+                <button class="btn btn-secondary" onclick="hostAnswer('无关')">无关</button>
+                <button class="btn btn-secondary" onclick="hostAnswer('恭喜你猜中了！')">🏆 猜中</button>
+                <button class="btn btn-ghost" onclick="hostAnswerCustom()">自定义…</button>
+              </div>
+            </div>
+          </div>` : ""}
+          ${(room.state?.key_nodes?.length || (room.ai_enabled && room.state && !room.state.cleared)) ? `
+          <div class="side-card">
+            <h4>🎯 关键节点 ${room.state?.key_nodes?.length ? `(${room.state.key_nodes.filter(n=>n.hit).length}/${room.state.key_nodes.length})` : ""}</h4>
+            ${room.state?.cleared ? `<p class="ai-hint" style="margin:0 0 8px;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}
+            ${room.state?.key_nodes?.length
+              ? `<div class="node-list">${room.state.key_nodes.map((n, i) => `
+                  <div class="node-item ${n.hit ? 'hit' : ''}">
+                    <span class="node-name">${n.hit ? '✅' : '⬜'} ${escapeHtml(n.name)}</span>
+                    ${room.host?.id === store.user?.id && !room.ai_enabled ? `
+                      <button class="node-toggle" onclick="toggleNode('${escapeJs(n.name)}', ${!n.hit})">${n.hit ? '取消' : '标记'}</button>
+                    ` : ''}
+                  </div>`).join("")}</div>`
+              : `<p class="ai-hint" style="margin:0">${room.ai_enabled ? 'AI 将在首次提问时自动拆分关键节点，命中 85% 即通关。' : '等待房主定义节点。'}</p>`}
+          </div>` : ""}
           ${room.ai_enabled ? `
           <div class="side-card">
             <h4>AI Key（房间共用）</h4>
@@ -1403,6 +1444,8 @@ function renderMsg(m) {
   if (m.msg_type) cls.push(m.msg_type);
   const prefix = m.msg_type === "ai_question" ? "🤔 " :
                  m.msg_type === "ai_answer" ? "🤖 " :
+                 m.msg_type === "host_question" ? "🙋 " :
+                 m.msg_type === "host_answer" ? "🎙 " :
                  m.msg_type === "system" ? "" : "";
   const who = m.msg_type === "system" ? "" : (m.username || "游客") + " · ";
   return `<div class="${cls.join(" ")}">
@@ -1486,6 +1529,45 @@ window.sendAiQuestion = async () => {
     return;
   }
   if (data.error) toast(data.error, "err");
+};
+
+// 玩家向主持人提问（真人主持模式）
+window.sendHostQuestion = async () => {
+  const input = $("#chatInput");
+  if (!input) return;
+  const content = input.value.trim();
+  if (!content) return;
+  const code = store.currentRoomCode;
+  if (!code) { toast("未在房间内", "err"); return; }
+  input.value = "";
+  const { ok, data } = await API.post(`/api/rooms/${code}/host-question`, { content });
+  if (!ok) { toast(data.error || "提问失败", "err"); return; }
+};
+
+// 房主回答（真人主持模式）
+window.hostAnswer = async (answer) => {
+  const code = store.currentRoomCode;
+  if (!code) return;
+  const { ok, data } = await API.post(`/api/rooms/${code}/host-answer`, { answer });
+  if (!ok) { toast(data.error || "回答失败", "err"); return; }
+  if (data.cleared) toast("🏆 通关！", "ok");
+  renderRoom(code);
+};
+
+window.hostAnswerCustom = async () => {
+  const answer = prompt("请输入你的回答：");
+  if (!answer) return;
+  await hostAnswer(answer.trim());
+};
+
+// 房主手动标记/取消标记关键节点（真人主持模式）
+window.toggleNode = async (nodeName, hit) => {
+  const code = store.currentRoomCode;
+  if (!code) return;
+  const { ok, data } = await API.post(`/api/rooms/${code}/hit-node`, { node: nodeName, hit });
+  if (!ok) { toast(data.error || "操作失败", "err"); return; }
+  if (data.cleared) toast("🏆 通关！", "ok");
+  renderRoom(code);
 };
 
 // 房主绑定 AI Key 到房间（加密存后端，房间全员共用）
