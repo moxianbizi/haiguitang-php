@@ -24,6 +24,20 @@ class Config {
     public static $MAIL_SMTP_PASS = '';
     public static $MAIL_FROM = '';
 
+    /**
+     * 邮件服务商：'smtp'（默认，走 465/587）或 'resend'（HTTP API，走 443，绕过端口封锁）
+     * - SMTP 在云厂商封端口时不可用，切到 resend 即可
+     * - Resend 需配置 RESEND_API_KEY，发件人用 Resend 控制台验证过的域名
+     */
+    public static $MAIL_PROVIDER = 'smtp';
+
+    /** Resend API Key（re_xxx），在 https://resend.com/api-keys 创建 */
+    public static $RESEND_API_KEY = '';
+
+    /** Resend 发件地址，必须用 Resend 已验证的域名（如 noreply@yourdomain.com）；
+     *  没有域名时可用 onboarding@resend.dev（仅能发到注册 Resend 的邮箱） */
+    public static $RESEND_FROM = '海龟汤馆 <onboarding@resend.dev>';
+
     /** 是否允许投稿（登录后任意用户） */
     public static $ALLOW_SUBMIT = true;
 
@@ -80,6 +94,9 @@ class Config {
         self::$MAIL_SMTP_PASS = $env('MAIL_SMTP_PASS', self::$MAIL_SMTP_PASS);
         self::$MAIL_FROM = $env('MAIL_FROM', self::$MAIL_FROM);
         self::$MAIL_FROM_NAME = $env('MAIL_FROM_NAME', self::$MAIL_FROM_NAME);
+        self::$MAIL_PROVIDER = $env('MAIL_PROVIDER', self::$MAIL_PROVIDER);
+        self::$RESEND_API_KEY = $env('RESEND_API_KEY', self::$RESEND_API_KEY);
+        self::$RESEND_FROM = $env('RESEND_FROM', self::$RESEND_FROM);
         self::$TOOL_TOKEN = $env('TOOL_TOKEN', self::$TOOL_TOKEN);
         self::$ADMIN_API_TOKEN = $env('ADMIN_API_TOKEN', self::$ADMIN_API_TOKEN);
         self::$ALLOW_REGISTER = $env('ALLOW_REGISTER', self::$ALLOW_REGISTER ? '1' : '0') === '1';
@@ -110,6 +127,9 @@ class Config {
                 elseif ($k === 'mail_smtp_pass') self::$MAIL_SMTP_PASS = $v;
                 elseif ($k === 'mail_from') self::$MAIL_FROM = $v;
                 elseif ($k === 'mail_from_name') self::$MAIL_FROM_NAME = $v;
+                elseif ($k === 'mail_provider') self::$MAIL_PROVIDER = $v;
+                elseif ($k === 'resend_api_key') self::$RESEND_API_KEY = $v;
+                elseif ($k === 'resend_from') self::$RESEND_FROM = $v;
             }
         } catch (Throwable $e) {
             // 表不存在或数据库未初始化时忽略

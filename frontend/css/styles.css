@@ -1589,6 +1589,25 @@ input, textarea {
   margin-left: 6px;
 }
 
+/* 邮件 provider 单选 */
+.provider-radio {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.provider-radio label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: normal;
+  cursor: pointer;
+}
+.provider-radio input[type="radio"] {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* Toast */
 .toast {
   position: fixed;

@@ -700,24 +700,27 @@ function admin_settings_update() {
     json_ok(['msg' => '已保存', 'updated' => $updated]);
 }
 
-// ===================== SMTP 邮件配置 =====================
+// ===================== SMTP / 邮件配置 =====================
 
-/** SMTP 配置可写键 + 校验规则 */
-function smtp_fields(): array {
+/** 邮件配置可写键 + 校验规则（SMTP + Resend 统一管理）
+ *  敏感字段标记 secret=true，存读时按"留空=不改"处理，回显时只返回 has_value */
+function mail_fields(): array {
     return [
-        'mail_smtp_host' => ['label' => 'SMTP 服务器', 'max' => 120, 'default' => ''],
-        'mail_smtp_port' => ['label' => 'SMTP 端口',    'max' => 5,   'default' => 465,  'int' => true, 'range' => [1, 65535]],
-        'mail_smtp_user' => ['label' => 'SMTP 账号',    'max' => 120, 'default' => ''],
-        'mail_smtp_pass' => ['label' => 'SMTP 密码/授权码', 'max' => 200, 'default' => ''],
-        'mail_from'      => ['label' => '发件邮箱',      'max' => 120, 'default' => ''],
-        'mail_from_name' => ['label' => '发件人名称',    'max' => 60,  'default' => '海龟汤馆'],
+        'mail_provider'   => ['label' => '邮件服务商',    'max' => 16,  'default' => 'smtp', 'enum' => ['smtp', 'resend']],
+        'mail_smtp_host'  => ['label' => 'SMTP 服务器',   'max' => 120, 'default' => ''],
+        'mail_smtp_port'  => ['label' => 'SMTP 端口',     'max' => 5,   'default' => 465,  'int' => true, 'range' => [1, 65535]],
+        'mail_smtp_user'  => ['label' => 'SMTP 账号',     'max' => 120, 'default' => ''],
+        'mail_smtp_pass'  => ['label' => 'SMTP 密码/授权码', 'max' => 200, 'default' => '', 'secret' => true],
+        'mail_from'       => ['label' => '发件邮箱',       'max' => 120, 'default' => ''],
+        'mail_from_name'  => ['label' => '发件人名称',     'max' => 60,  'default' => '海龟汤馆'],
+        'resend_api_key'  => ['label' => 'Resend API Key', 'max' => 120, 'default' => '', 'secret' => true],
+        'resend_from'     => ['label' => 'Resend 发件人',   'max' => 120, 'default' => '海龟汤馆 <onboarding@resend.dev>'],
     ];
 }
 
-/** 读取 SMTP 配置：密码/授权码以 has_value 布尔回显，绝不回明文 */
+/** 读取邮件配置：敏感字段以 has_value 布尔回显，绝不回明文 */
 function admin_smtp_get() {
-    // 优先从 settings 表读（持久化值），未设置则用 Config 默认值
-    $fields = smtp_fields();
+    $fields = mail_fields();
     $pdo = DB::pdo();
     $stored = [];
     try {
@@ -730,20 +733,31 @@ function admin_smtp_get() {
 
     $out = [];
     foreach ($fields as $k => $meta) {
-        $val = $stored[$k] ?? Config::${strtoupper($k)};
-        if ($k === 'mail_smtp_pass') {
+        $propName = strtoupper($k);
+        $val = array_key_exists($k, $stored) ? $stored[$k] : (property_exists(Config::class, $propName) ? Config::$$propName : ($meta['default'] ?? ''));
+        if (!empty($meta['secret'])) {
             $out[$k] = ['has_value' => $val !== '', 'value' => ''];
         } else {
             $out[$k] = $val;
         }
     }
-    json_ok(['smtp' => $out, 'configured' => (Config::$MAIL_SMTP_HOST !== '' && Config::$MAIL_SMTP_USER !== '')]);
+
+    // 当前 provider 是否已就绪
+    $ready = (Config::$MAIL_PROVIDER === 'resend')
+        ? (Config::$RESEND_API_KEY !== '')
+        : (Config::$MAIL_SMTP_HOST !== '' && Config::$MAIL_SMTP_USER !== '');
+
+    json_ok([
+        'mail' => $out,
+        'provider' => Config::$MAIL_PROVIDER ?: 'smtp',
+        'configured' => $ready,
+    ]);
 }
 
-/** 保存 SMTP 配置；密码字段为空字符串表示不改 */
+/** 保存邮件配置；敏感字段空字符串表示不改 */
 function admin_smtp_update() {
     $data = body_json();
-    $fields = smtp_fields();
+    $fields = mail_fields();
     $pdo = DB::pdo();
     $updated = [];
 
@@ -751,8 +765,13 @@ function admin_smtp_update() {
         if (!array_key_exists($k, $data)) continue;
         $v = $data[$k];
 
-        // 密码字段：空字符串表示"不改"，跳过；非空则覆盖
-        if ($k === 'mail_smtp_pass' && $v === '') continue;
+        // 敏感字段：空字符串表示"不改"，跳过；非空则覆盖
+        if (!empty($meta['secret']) && $v === '') continue;
+
+        // 枚举校验
+        if (!empty($meta['enum']) && !in_array($v, $meta['enum'], true)) {
+            json_error($meta['label'] . ' 取值只能是：' . implode(' / ', $meta['enum']));
+        }
 
         // 类型 + 长度校验
         if (!empty($meta['int'])) {
@@ -779,11 +798,11 @@ function admin_smtp_update() {
         $updated[] = $k;
     }
 
-    log_admin_action('smtp_update', '', implode(', ', $updated));
-    json_ok(['msg' => 'SMTP 配置已保存', 'updated' => $updated]);
+    log_admin_action('mail_settings_update', '', implode(', ', $updated));
+    json_ok(['msg' => '邮件配置已保存', 'updated' => $updated]);
 }
 
-/** 测试发信：用当前保存的 SMTP 配置发一封测试邮件到指定邮箱 */
+/** 测试发信：按当前 provider 发一封测试邮件 */
 function admin_smtp_test() {
     $data = body_json();
     $to = trim($data['to'] ?? '');
@@ -791,35 +810,45 @@ function admin_smtp_test() {
         json_error('请填写有效的收件邮箱');
     }
 
-    if (Config::$MAIL_SMTP_HOST === '' || Config::$MAIL_SMTP_USER === '') {
-        json_error('请先填写并保存 SMTP 服务器和账号');
+    $provider = Config::$MAIL_PROVIDER ?: 'smtp';
+    if ($provider === 'resend') {
+        if (Config::$RESEND_API_KEY === '') {
+            json_error('请先填写并保存 Resend API Key');
+        }
+        $from = Config::$RESEND_FROM ?: '海龟汤馆 <onboarding@resend.dev>';
+    } else {
+        if (Config::$MAIL_SMTP_HOST === '' || Config::$MAIL_SMTP_USER === '') {
+            json_error('请先填写并保存 SMTP 服务器和账号，或切换到 Resend');
+        }
+        $from = Config::$MAIL_FROM ?: Config::$MAIL_SMTP_USER;
     }
 
-    $subject = '海龟汤馆 - SMTP 测试邮件';
+    $subject = '海龟汤馆 - 邮件测试';
     $html = <<<HTML
 <div style="font-family:sans-serif;max-width:480px;margin:auto">
   <h2 style="color:#6ee7ff">海龟汤馆</h2>
-  <p>这是一封来自海龟汤馆后台的 SMTP 测试邮件。</p>
-  <p>如果你能收到这封邮件，说明 SMTP 配置正确。</p>
+  <p>这是一封来自海龟汤馆后台的测试邮件（provider: {$provider}）。</p>
+  <p>如果你能收到这封邮件，说明邮件配置正确。</p>
   <p style="color:#888;font-size:0.85rem">发送时间：__TIME__</p>
 </div>
 HTML;
     $html = str_replace('__TIME__', date('Y-m-d H:i:s'), $html);
 
     try {
-        $sent = smtp_send(
-            Config::$MAIL_SMTP_HOST,
-            Config::$MAIL_SMTP_PORT,
-            Config::$MAIL_SMTP_USER,
-            Config::$MAIL_SMTP_PASS,
-            Config::$MAIL_FROM ?: Config::$MAIL_SMTP_USER,
-            $to, $subject, $html
-        );
-        if (!$sent) json_error('邮件发送失败（SMTP 返回失败）');
-        log_admin_action('smtp_test', $to, 'success');
-        json_ok(['msg' => "测试邮件已发送至 {$to}，请查收"]);
+        if ($provider === 'resend') {
+            $sent = resend_send(Config::$RESEND_API_KEY, $from, $to, $subject, $html);
+        } else {
+            $sent = smtp_send(
+                Config::$MAIL_SMTP_HOST, Config::$MAIL_SMTP_PORT,
+                Config::$MAIL_SMTP_USER, Config::$MAIL_SMTP_PASS,
+                $from, $to, $subject, $html
+            );
+        }
+        if (!$sent) json_error('邮件发送失败');
+        log_admin_action('mail_test', $to, "provider={$provider} success");
+        json_ok(['msg' => "测试邮件已通过 {$provider} 发送至 {$to}，请查收"]);
     } catch (Throwable $e) {
-        log_admin_action('smtp_test', $to, 'fail: ' . $e->getMessage());
+        log_admin_action('mail_test', $to, "provider={$provider} fail: " . $e->getMessage());
         json_error('邮件发送失败：' . $e->getMessage());
     }
 }

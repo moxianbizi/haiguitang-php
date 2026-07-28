@@ -2386,8 +2386,8 @@ window.adminMsgDelete = async (id) => {
 
 // ---- 系统设置 ----
 async function adminSettings() {
-  // 同时拉系统设置和 SMTP 配置
-  const [resSettings, resSmtp] = await Promise.all([
+  // 同时拉系统设置和邮件配置
+  const [resSettings, resMail] = await Promise.all([
     AdminAPI.get("/api/admin/settings"),
     AdminAPI.get("/api/admin/settings/smtp"),
   ]);
@@ -2396,8 +2396,13 @@ async function adminSettings() {
 
   const s = resSettings.data.settings || {};
   const config = resSettings.data.config || {};
-  const smtp = resSmtp.ok ? (resSmtp.data.smtp || {}) : {};
-  const passHasValue = smtp.mail_smtp_pass && smtp.mail_smtp_pass.has_value;
+  const mail = resMail.ok ? (resMail.data.mail || {}) : {};
+  const curProvider = resMail.ok ? (resMail.data.provider || "smtp") : "smtp";
+  const smtpPassHas = mail.mail_smtp_pass && mail.mail_smtp_pass.has_value;
+  const resendKeyHas = mail.resend_api_key && mail.resend_api_key.has_value;
+
+  const showSmtp = curProvider === "smtp" ? "" : "display:none";
+  const showResend = curProvider === "resend" ? "" : "display:none";
 
   c.innerHTML = `
     <div class="admin-section">
@@ -2424,35 +2429,59 @@ async function adminSettings() {
     </div>
 
     <div class="admin-section">
-      <h3 class="admin-subtitle">📧 SMTP 邮件配置</h3>
-      <p class="admin-hint">用于注册账号发送验证码。不配置则注册时验证码会直接显示在页面（仅开发模式）。</p>
+      <h3 class="admin-subtitle">📧 邮件配置（注册验证码）</h3>
+      <p class="admin-hint">SMTP 走 465/587 端口，云厂商封端口时切到 Resend（HTTP API，走 443，绕过封锁）。</p>
       <div class="admin-form">
         <div class="admin-form-row">
-          <label>SMTP 服务器</label>
-          <input class="input" id="smtp_host" placeholder="如 smtp.qq.com / smtp.163.com / smtp.gmail.com" value="${escapeHtml(smtp.mail_smtp_host || '')}" />
+          <label>邮件服务商</label>
+          <div class="provider-radio">
+            <label><input type="radio" name="mail_provider" value="smtp" ${curProvider === 'smtp' ? 'checked' : ''} onchange="switchMailProvider('smtp')" /> SMTP（465/587）</label>
+            <label><input type="radio" name="mail_provider" value="resend" ${curProvider === 'resend' ? 'checked' : ''} onchange="switchMailProvider('resend')" /> Resend HTTP API（443，推荐）</label>
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label>SMTP 端口</label>
-          <input class="input" type="number" id="smtp_port" placeholder="465（SSL）/ 587（STARTTLS）" value="${escapeHtml(String(smtp.mail_smtp_port || 465))}" />
+
+        <div id="smtpBlock" style="${showSmtp}">
+          <div class="admin-form-row">
+            <label>SMTP 服务器</label>
+            <input class="input" id="smtp_host" placeholder="smtp.qq.com / smtp.163.com / smtp.gmail.com" value="${escapeHtml(mail.mail_smtp_host || '')}" />
+          </div>
+          <div class="admin-form-row">
+            <label>SMTP 端口</label>
+            <input class="input" type="number" id="smtp_port" placeholder="465（SSL）/ 587（STARTTLS）" value="${escapeHtml(String(mail.mail_smtp_port || 465))}" />
+          </div>
+          <div class="admin-form-row">
+            <label>SMTP 账号</label>
+            <input class="input" id="smtp_user" placeholder="发件邮箱地址" value="${escapeHtml(mail.mail_smtp_user || '')}" />
+          </div>
+          <div class="admin-form-row">
+            <label>SMTP 密码 / 授权码 ${smtpPassHas ? '<span class="smtp-pass-set">（已设置，留空不修改）</span>' : ''}</label>
+            <input class="input" id="smtp_pass" type="password" placeholder="${smtpPassHas ? '已设置，留空不修改' : '邮箱授权码（不是登录密码）'}" />
+          </div>
+          <div class="admin-form-row">
+            <label>发件邮箱（不填默认用 SMTP 账号）</label>
+            <input class="input" id="smtp_from" placeholder="noreply@yourdomain.com" value="${escapeHtml(mail.mail_from || '')}" />
+          </div>
+          <div class="admin-form-row">
+            <label>发件人名称</label>
+            <input class="input" id="smtp_from_name" placeholder="海龟汤馆" value="${escapeHtml(mail.mail_from_name || '海龟汤馆')}" />
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label>SMTP 账号</label>
-          <input class="input" id="smtp_user" placeholder="发件邮箱地址" value="${escapeHtml(smtp.mail_smtp_user || '')}" />
+
+        <div id="resendBlock" style="${showResend}">
+          <div class="admin-form-row">
+            <label>Resend API Key ${resendKeyHas ? '<span class="smtp-pass-set">（已设置，留空不修改）</span>' : ''}</label>
+            <input class="input" id="resend_api_key" type="password" placeholder="${resendKeyHas ? '已设置，留空不修改' : 're_xxx，在 https://resend.com/api-keys 创建'}" />
+            <p class="admin-hint">注册 Resend 账号 → API Keys → Create API Key → 复制 re_xxx</p>
+          </div>
+          <div class="admin-form-row">
+            <label>Resend 发件人</label>
+            <input class="input" id="resend_from" placeholder='海龟汤馆 <onboarding@resend.dev>' value="${escapeHtml(mail.resend_from || '海龟汤馆 <onboarding@resend.dev>')}" />
+            <p class="admin-hint">必须用 Resend 已验证的域名。没有域名时用 onboarding@resend.dev（仅能发到注册 Resend 的邮箱）。</p>
+          </div>
         </div>
-        <div class="admin-form-row">
-          <label>SMTP 密码 / 授权码 ${passHasValue ? '<span class="smtp-pass-set">（已设置，留空表示不修改）</span>' : ''}</label>
-          <input class="input" id="smtp_pass" type="password" placeholder="${passHasValue ? '已设置，留空不修改' : '邮箱授权码（不是登录密码）'}" />
-        </div>
-        <div class="admin-form-row">
-          <label>发件邮箱（不填默认用 SMTP 账号）</label>
-          <input class="input" id="smtp_from" placeholder="如 noreply@yourdomain.com" value="${escapeHtml(smtp.mail_from || '')}" />
-        </div>
-        <div class="admin-form-row">
-          <label>发件人名称</label>
-          <input class="input" id="smtp_from_name" placeholder="海龟汤馆" value="${escapeHtml(smtp.mail_from_name || '海龟汤馆')}" />
-        </div>
+
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-primary" onclick="adminSmtpSave()">💾 保存 SMTP 配置</button>
+          <button class="btn btn-primary" onclick="adminMailSave()">💾 保存邮件配置</button>
           <button class="btn btn-secondary" onclick="adminSmtpTestModal()">📨 发送测试邮件</button>
         </div>
       </div>
@@ -2482,6 +2511,13 @@ async function adminSettings() {
   `;
 }
 
+window.switchMailProvider = (p) => {
+  const smtp = $("#smtpBlock");
+  const resend = $("#resendBlock");
+  if (smtp) smtp.style.display = (p === "smtp") ? "" : "none";
+  if (resend) resend.style.display = (p === "resend") ? "" : "none";
+};
+
 window.adminSettingsSave = async () => {
   const body = {
     allow_submit: $("#set_allow_submit").checked,
@@ -2493,34 +2529,39 @@ window.adminSettingsSave = async () => {
   toast("设置已保存", "ok");
 };
 
-window.adminSmtpSave = async () => {
+window.adminMailSave = async () => {
+  // 读取当前选中的 provider
+  const provider = document.querySelector('input[name="mail_provider"]:checked')?.value || "smtp";
   const body = {
-    mail_smtp_host: $("#smtp_host").value.trim(),
-    mail_smtp_port: parseInt($("#smtp_port").value) || 465,
-    mail_smtp_user: $("#smtp_user").value.trim(),
-    mail_smtp_pass: $("#smtp_pass").value, // 空字符串后端会跳过
-    mail_from: $("#smtp_from").value.trim(),
-    mail_from_name: $("#smtp_from_name").value.trim() || "海龟汤馆",
+    mail_provider: provider,
+    mail_smtp_host: $("#smtp_host")?.value.trim() || "",
+    mail_smtp_port: parseInt($("#smtp_port")?.value) || 465,
+    mail_smtp_user: $("#smtp_user")?.value.trim() || "",
+    mail_smtp_pass: $("#smtp_pass")?.value || "",
+    mail_from: $("#smtp_from")?.value.trim() || "",
+    mail_from_name: $("#smtp_from_name")?.value.trim() || "海龟汤馆",
+    resend_api_key: $("#resend_api_key")?.value || "",
+    resend_from: $("#resend_from")?.value.trim() || "海龟汤馆 <onboarding@resend.dev>",
   };
   const { ok, data } = await AdminAPI.put("/api/admin/settings/smtp", body);
   if (!ok) { toast(data.error || "保存失败", "err"); return; }
-  toast("SMTP 配置已保存", "ok");
-  // 重新加载以刷新密码字段状态
+  toast("邮件配置已保存", "ok");
   adminSettings();
 };
 
 window.adminSmtpTestModal = () => {
   const root = $("#modalRoot");
   if (!root) return;
+  const provider = document.querySelector('input[name="mail_provider"]:checked')?.value || "smtp";
   root.innerHTML = `
     <div class="overlay open" onclick="closeModal(event)"></div>
     <div class="modal open">
       <div class="modal-header">
-        <div><h2 class="modal-title">发送测试邮件</h2></div>
+        <div><h2 class="modal-title">发送测试邮件（${escapeHtml(provider)}）</h2></div>
         <button class="modal-close" onclick="closeModal(event)">✕</button>
       </div>
       <div class="modal-body">
-        <p class="admin-hint" style="margin-bottom:14px">使用当前已保存的 SMTP 配置，向指定邮箱发送一封测试邮件。</p>
+        <p class="admin-hint" style="margin-bottom:14px">使用当前已保存的邮件配置（provider: ${escapeHtml(provider)}），向指定邮箱发送一封测试邮件。</p>
         <div class="field">
           <label>收件邮箱</label>
           <input class="input" id="smtpTestTo" type="email" placeholder="输入收件邮箱地址" />

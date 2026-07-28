@@ -3,6 +3,7 @@
 
 /**
  * 发送验证码到邮箱
+ * 根据 Config::$MAIL_PROVIDER 走 SMTP 或 Resend HTTP API
  * 返回 [success, msg, token]
  * token 为签名 token，注册时连同验证码一起回传用于校验
  */
@@ -10,9 +11,14 @@ function send_verification_code(string $email): array {
     $code = gen_code(6);
     $token = sign_code($email, $code);
 
-    if (!Config::$MAIL_SMTP_HOST) {
+    $provider = Config::$MAIL_PROVIDER ?: 'smtp';
+    $configured = ($provider === 'resend')
+        ? (Config::$RESEND_API_KEY !== '')
+        : (Config::$MAIL_SMTP_HOST !== '' && Config::$MAIL_SMTP_USER !== '');
+
+    if (!$configured) {
         // 开发模式：直接返回验证码
-        return [false, "SMTP 未配置，验证码为: {$code}（仅开发模式）", $token];
+        return [false, "邮件服务未配置（provider={$provider}），验证码为: {$code}（仅开发模式）", $token];
     }
 
     $subject = '海龟汤馆 - 验证码';
@@ -26,20 +32,97 @@ function send_verification_code(string $email): array {
 HTML;
 
     try {
-        $host = Config::$MAIL_SMTP_HOST;
-        $port = Config::$MAIL_SMTP_PORT;
-        $user = Config::$MAIL_SMTP_USER;
-        $pass = Config::$MAIL_SMTP_PASS;
-        $from = Config::$MAIL_FROM ?: $user;
-
-        // 用 fsockopen + STARTTLS 简化实现（避免依赖 Mail 扩展）
-        // 这里优先用 PHP 内置的 SMTP 通信
-        $sent = smtp_send($host, $port, $user, $pass, $from, $email, $subject, $html);
+        if ($provider === 'resend') {
+            $sent = resend_send(Config::$RESEND_API_KEY, Config::$RESEND_FROM, $email, $subject, $html);
+        } else {
+            $host = Config::$MAIL_SMTP_HOST;
+            $port = Config::$MAIL_SMTP_PORT;
+            $user = Config::$MAIL_SMTP_USER;
+            $pass = Config::$MAIL_SMTP_PASS;
+            $from = Config::$MAIL_FROM ?: $user;
+            $sent = smtp_send($host, $port, $user, $pass, $from, $email, $subject, $html);
+        }
         if ($sent) return [true, '验证码已发送', $token];
         return [false, '邮件发送失败', $token];
     } catch (Throwable $e) {
         return [false, '邮件发送失败: ' . $e->getMessage(), $token];
     }
+}
+
+/**
+ * 通过 Resend HTTP API 发邮件
+ * 走 HTTPS 443，绕开云厂商对 465/587 出口端口的封锁
+ *
+ * @param string $apiKey  Resend API Key（re_xxx）
+ * @param string $from    发件人，必须用 Resend 已验证的域名（如 "海龟汤馆 <onboarding@resend.dev>"）
+ * @param string $to      收件邮箱
+ * @param string $subject 邮件主题
+ * @param string $html    HTML 正文
+ * @return bool
+ */
+function resend_send(string $apiKey, string $from, string $to, string $subject, string $html): bool {
+    $apiKey = trim($apiKey);
+    if ($apiKey === '') throw new RuntimeException('Resend API Key 为空');
+    if (!str_starts_with($apiKey, 're_')) {
+        throw new RuntimeException('Resend API Key 格式不正确（应以 re_ 开头）');
+    }
+    if ($from === '') throw new RuntimeException('Resend 发件人未配置');
+
+    // Resend API 端点走 HTTPS 443，端口封锁不影响
+    $payload = json_encode([
+        'from'    => $from,
+        'to'      => [$to],
+        'subject' => $subject,
+        'html'    => $html,
+    ], JSON_UNESCAPED_UNICODE);
+
+    $ch = curl_init('https://api.resend.com/emails');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $payload,
+        CURLOPT_HTTPHEADER     => [
+            'Authorization: Bearer ' . $apiKey,
+            'Content-Type: application/json',
+        ],
+        CURLOPT_TIMEOUT        => 20,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $resp = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        if (str_contains($err, 'timed out') || str_contains($err, 'Timeout')) {
+            throw new RuntimeException('Resend API 调用超时');
+        }
+        throw new RuntimeException('Resend API 调用失败：' . $err);
+    }
+    if ($status === 200 || $status === 201) return true;
+
+    // 解析错误信息
+    $detail = '';
+    $j = json_decode($resp, true);
+    if (is_array($j)) {
+        if (isset($j['message'])) $detail = is_string($j['message']) ? $j['message'] : json_encode($j['message'], JSON_UNESCAPED_UNICODE);
+        elseif (isset($j['error'])) $detail = is_string($j['error']) ? $j['error'] : json_encode($j['error'], JSON_UNESCAPED_UNICODE);
+        elseif (isset($j['name']) && isset($j['message'])) $detail = $j['name'] . ': ' . $j['message'];
+    }
+    if ($detail === '') $detail = mb_substr($resp, 0, 200);
+
+    // 常见错误给出可操作提示
+    if ($status === 401 || $status === 403) {
+        throw new RuntimeException("Resend API Key 无效或无权限（{$status}）：{$detail}");
+    }
+    if ($status === 422) {
+        throw new RuntimeException("Resend 请求参数错误（422）：{$detail}\n常见原因：发件域名未在 Resend 验证、收件邮箱格式错误");
+    }
+    if ($status === 429) {
+        throw new RuntimeException("Resend 触发频率限制（429）：{$detail}");
+    }
+    throw new RuntimeException("Resend API 返回错误（{$status}）：{$detail}");
 }
 
 /** 极简 SMTP 客户端（支持 SSL 直连 465 或 STARTTLS 587） */
