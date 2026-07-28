@@ -1219,7 +1219,7 @@ async function renderRooms() {
             <input class="input" id="newRoomMemberLimit" type="number" min="0" max="99" value="0" placeholder="0 = 无限" />
           </div>
           <button class="btn btn-primary" style="width:100%" onclick="createRoom()">创建房间</button>
-          ${!KeyMgr.has() ? `<p class="ai-hint" style="margin-top:10px"><span class="warn">提示：</span>启用 AI 需先在右上角 ⚙ 配置 DeepSeek Key</p>` : ""}
+          <p class="ai-hint" style="margin-top:10px">提示：创建后房主可在房间侧栏绑定 AI Key，房间全员共用，无需各自配置。</p>
         </div>
         <h3 class="section-title" style="margin-top:32px">进行中的房间</h3>
         <div id="roomList"><div class="empty"><div class="spinner"></div></div></div>
@@ -1243,7 +1243,7 @@ async function loadRoomList() {
     <div class="room-card">
       <div>
         <div class="code">${escapeHtml(r.code)}</div>
-        <div class="info">房主：${escapeHtml(r.host?.username || "未知")} · ${r.ai_enabled ? "AI 已启用" : "无 AI"}${r.ai_question_limit > 0 ? ` · AI ${r.ai_question_count}/${r.ai_question_limit}` : ""}${r.member_limit > 0 ? ` · ${r.member_count}/${r.member_limit}人` : ""}</div>
+        <div class="info">房主：${escapeHtml(r.host?.username || "未知")} · ${r.ai_enabled ? "AI 已启用" : "无 AI"}${r.ai_enabled ? (r.has_host_key ? " · Key✓" : " · Key✗") : ""}${r.ai_question_limit > 0 ? ` · AI ${r.ai_question_count}/${r.ai_question_limit}` : ""}${r.member_limit > 0 ? ` · ${r.member_count}/${r.member_limit}人` : ""}</div>
       </div>
       <button class="btn btn-primary" style="min-width:auto;flex:0 0 auto;padding:8px 18px" onclick="location.hash='#/room/${r.code}'">进入</button>
     </div>
@@ -1288,10 +1288,7 @@ window.confirmPickSoup = (id, title) => {
 
 window.createRoom = async () => {
   const ai_enabled = $("#newRoomAi").checked;
-  if (ai_enabled && !KeyMgr.has()) {
-    toast("启用 AI 需先配置 DeepSeek Key（右上角 ⚙）", "err");
-    return;
-  }
+  // 不再强制要求本机有 key：房主进入房间后可单独绑定 key 给房间全员共用
   const { ok, data } = await API.post("/api/rooms", {
     soup_id: _pickedSoupId || null,
     ai_enabled,
@@ -1299,6 +1296,13 @@ window.createRoom = async () => {
     member_limit: parseInt($("#newRoomMemberLimit")?.value) || 0,
   });
   if (!ok) { toast(data.error || "创建失败", "err"); return; }
+  // 若房主本机已配置 key，自动绑定到房间（方便房主，省一步）
+  if (ai_enabled && KeyMgr.has()) {
+    await API.post(`/api/rooms/${data.code}/ai-key`, {
+      api_key: KeyMgr.get(),
+      ...KeyMgr.getProviderPayload(),
+    });
+  }
   location.hash = "#/room/" + data.code;
 };
 
@@ -1356,9 +1360,19 @@ async function renderRoom(code) {
             <p class="ai-hint" style="margin:0">
               看汤面 → 向 AI 提是非题 → AI 只答「是/否/无关」→ 猜出汤底。
               ${room.host?.id === store.user?.id ? "你是房主，可换汤。" : ""}
-              ${!KeyMgr.has() && room.ai_enabled ? '<br><span class="warn">提示：AI 已启用但你还没填 DeepSeek Key（右上角 ⚙）</span>' : ""}
             </p>
           </div>
+          ${room.ai_enabled ? `
+          <div class="side-card">
+            <h4>AI Key（房间共用）</h4>
+            ${room.has_host_key
+              ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
+              : `<p class="ai-hint" style="margin:0 0 8px"><span class="warn">⚠ 本房间尚未绑定 AI Key</span></p>`}
+            ${room.host?.id === store.user?.id && room.status !== "ended" ? `
+              <button class="btn btn-secondary" style="width:100%;margin-bottom:6px" onclick="bindHostKey('${escapeJs(room.code)}')">${room.has_host_key ? "更新 AI Key" : "绑定 AI Key"}</button>
+              ${room.has_host_key ? `<button class="btn btn-ghost" style="width:100%" onclick="unbindHostKey('${escapeJs(room.code)}')">解绑</button>` : ""}
+            ` : ""}
+          </div>` : ""}
           ${room.host?.id === store.user?.id ? `
           <div class="side-card">
             <h4>房间管理</h4>
@@ -1460,15 +1474,48 @@ window.sendAiQuestion = async () => {
   if (!content) return;
   const code = store.currentRoomCode;
   if (!code) { toast("未在房间内", "err"); return; }
-  if (!KeyMgr.has()) { toast("请先在右上角 ⚙ 配置 DeepSeek Key", "err"); return; }
   input.value = "";
-  const { ok, data } = await API.post(`/api/rooms/${code}/ai-question`, {
-    content,
-    api_key: KeyMgr.get(),
-    ...KeyMgr.getProviderPayload(),
-  });
-  if (!ok) { toast(data.error || "提问失败", "err"); return; }
+  // 不传 api_key：后端优先用房间绑定的房主 key（全员共用）
+  const { ok, data } = await API.post(`/api/rooms/${code}/ai-question`, { content });
+  if (!ok) {
+    if (data.code === "missing_key") {
+      toast("本房间未绑定 AI Key，请房主在房间侧栏绑定", "err");
+    } else {
+      toast(data.error || "提问失败", "err");
+    }
+    return;
+  }
   if (data.error) toast(data.error, "err");
+};
+
+// 房主绑定 AI Key 到房间（加密存后端，房间全员共用）
+window.bindHostKey = async (code) => {
+  // 优先用本机已配置的 key；没有则弹框让房主输入
+  let key = KeyMgr.get();
+  let cfg = KeyMgr.getConfig();
+  if (!key) {
+    key = prompt("请输入 DeepSeek API Key（sk-...）：\n绑定后房间全员共用此 Key，无需各自配置。");
+    if (!key) return;
+    key = key.trim();
+    cfg = {};
+  }
+  const { ok, data } = await API.post(`/api/rooms/${code}/ai-key`, {
+    api_key: key,
+    provider: cfg.provider || "deepseek",
+    base_url: cfg.baseUrl || "",
+    model: cfg.model || "",
+  });
+  if (!ok) { toast(data.error || "绑定失败", "err"); return; }
+  toast("AI Key 已绑定，房间全员可共用", "ok");
+  renderRoom(code);
+};
+
+window.unbindHostKey = async (code) => {
+  if (!confirm("确认解绑房间 AI Key？\n解绑后房间内任何人都无法向 AI 提问。")) return;
+  const { ok, data } = await API.post(`/api/rooms/${code}/ai-key`, { api_key: "" });
+  if (!ok) { toast(data.error || "解绑失败", "err"); return; }
+  toast("已解绑", "ok");
+  renderRoom(code);
 };
 
 // 房主结束房间（软关闭，保留记录，可恢复）

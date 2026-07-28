@@ -182,6 +182,10 @@ class DB {
         // 为灵之残响房间查询建索引
         $pdo->exec("CREATE INDEX IF NOT EXISTS idx_rooms_type ON rooms(room_type) WHERE room_type = 'lzcx'");
 
+        // 迁移：rooms 表补 ai_key_encrypted（房主绑定的 AI Key，加密存储，房间全员共用）
+        $roomCols4 = $pdo->query('PRAGMA table_info(rooms)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('ai_key_encrypted', $roomCols4)) $pdo->exec("ALTER TABLE rooms ADD COLUMN ai_key_encrypted TEXT DEFAULT NULL");
+
         // 迁移：新建 room_members 表（灵之残响房间角色分配）
         // 复用 ON DELETE CASCADE 跟随 rooms 清理
         $pdo->exec("

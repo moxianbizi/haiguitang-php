@@ -19,6 +19,7 @@ function handle_rooms(array $segments) {
     elseif ($sub === 'select-soup' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_select_soup($code);
     elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_send_message($code);
     elseif ($sub === 'ai-question' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_ai_question($code);
+    elseif ($sub === 'ai-key' && $_SERVER['REQUEST_METHOD'] === 'POST') rooms_set_ai_key($code);
     elseif ($sub === 'messages' && $_SERVER['REQUEST_METHOD'] === 'GET') { require_login(); rooms_poll_messages($code); }
     else json_error('Not Found', 404);
 }
@@ -227,6 +228,18 @@ function rooms_ai_question(string $code) {
         json_error('AI 提问次数已达上限（' . (int)$r['ai_question_limit'] . '次）');
     }
 
+    // ===== 房主 key 共享：优先用房间绑定的加密 key，没有才用前端传的 key =====
+    [$hostKey, $hostProvider, $hostBaseUrl, $hostModel] = rooms_decode_host_key($r['ai_key_encrypted'] ?? null);
+    if ($hostKey !== '') {
+        $api_key = $hostKey;
+        $provider = $hostProvider ?: $provider;
+        $ai_base_url = $hostBaseUrl ?: $ai_base_url;
+        $ai_model = $hostModel ?: $ai_model;
+    }
+    if ($api_key === '') {
+        json_error('本房间未绑定 AI Key，请房主在房间内绑定后再提问', 'missing_key');
+    }
+
     // 保存问题
     $q_msg = save_message($r['id'], $user, 'ai_question', $content);
 
@@ -286,6 +299,66 @@ function rooms_poll_messages(string $code) {
     json_ok(['messages' => array_map('message_to_dict', $msgs), 'last_id' => end($msgs) ? (int)end($msgs)['id'] : $since]);
 }
 
+/**
+ * 房主绑定/更新 AI Key（加密存储到 rooms.ai_key_encrypted，房间全员共用）
+ * 传 api_key 为空表示解绑。
+ */
+function rooms_set_ai_key(string $code) {
+    $user = require_login();
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT id, host_id, status FROM rooms WHERE code = ?');
+    $stmt->execute([$code]);
+    $r = $stmt->fetch();
+    if (!$r) json_error('房间不存在', 404);
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以绑定 AI Key', 403);
+
+    $data = body_json();
+    $key = trim((string)($data['api_key'] ?? ''));
+    $provider = trim((string)($data['provider'] ?? 'deepseek'));
+    $baseUrl = trim((string)($data['base_url'] ?? ''));
+    $model = trim((string)($data['model'] ?? ''));
+
+    if ($key === '') {
+        $stmt = $pdo->prepare('UPDATE rooms SET ai_key_encrypted = NULL WHERE id = ?');
+        $stmt->execute([(int)$r['id']]);
+        save_message((int)$r['id'], $user, 'system', '房主解绑了房间 AI Key');
+        json_ok(['msg' => '已解绑', 'has_key' => false]);
+    }
+    if (strlen($key) > 200) json_error('AI Key 过长');
+
+    $bundle = json_encode([
+        'key' => $key,
+        'provider' => $provider,
+        'base_url' => $baseUrl,
+        'model' => $model,
+    ], JSON_UNESCAPED_UNICODE);
+    $enc = encrypt_secret($bundle);
+    if ($enc === null) json_error('加密失败，请稍后重试', 500);
+
+    $stmt = $pdo->prepare('UPDATE rooms SET ai_key_encrypted = ? WHERE id = ?');
+    $stmt->execute([$enc, (int)$r['id']]);
+    save_message((int)$r['id'], $user, 'system', '房主绑定了 AI Key，房间全员可共用');
+    json_ok(['msg' => '已绑定', 'has_key' => true]);
+}
+
+/**
+ * 解密房间绑定的 AI Key bundle，返回 [key, provider, base_url, model]
+ */
+function rooms_decode_host_key(?string $cipher): array {
+    $raw = decrypt_secret($cipher);
+    if ($raw === '') return ['', 'deepseek', '', ''];
+    $j = json_decode($raw, true);
+    if (is_array($j) && isset($j['key'])) {
+        return [
+            (string)$j['key'],
+            (string)($j['provider'] ?? 'deepseek'),
+            (string)($j['base_url'] ?? ''),
+            (string)($j['model'] ?? ''),
+        ];
+    }
+    return [$raw, 'deepseek', '', ''];
+}
+
 // ===================== 辅助 =====================
 
 function save_message(int $room_id, ?array $user, string $type, string $content): array {
@@ -328,6 +401,8 @@ function room_to_dict(array $r): array {
         'ai_question_count' => (int)($r['ai_question_count'] ?? 0),
         'member_limit' => (int)($r['member_limit'] ?? 0),
         'member_count' => count_room_members($r),
+        // 房主是否已绑定 AI Key（房间全员共用），不暴露 key 本身
+        'has_host_key' => !empty($r['ai_key_encrypted']),
     ];
 }
 

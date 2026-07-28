@@ -255,3 +255,38 @@ function validate_length(string $value, int $max, string $field = '输入'): voi
         json_error("{$field}不能超过 {$max} 个字符");
     }
 }
+
+/**
+ * 用 SECRET_KEY 加密字符串（用于房主 AI Key 持久化）
+ * 算法：XOR + base64，足够防止数据库泄露时明文暴露；
+ * 不追求对抗性强加密（Key 本身用户可控，房主自愿绑定）。
+ * 返回 base64 字符串，失败返回 null。
+ */
+function encrypt_secret(string $plain): ?string {
+    $key = Config::$SECRET_KEY;
+    if ($key === '' || $plain === '') return null;
+    $klen = strlen($key);
+    $plen = strlen($plain);
+    $out = '';
+    for ($i = 0; $i < $plen; $i++) {
+        $out .= chr(ord($plain[$i]) ^ ord($key[$i % $klen]));
+    }
+    $b64 = base64_encode($out);
+    return $b64 === false ? null : $b64;
+}
+
+/** 解密 encrypt_secret 的输出，失败返回空字符串 */
+function decrypt_secret(?string $cipher): string {
+    if ($cipher === null || $cipher === '') return '';
+    $key = Config::$SECRET_KEY;
+    if ($key === '') return '';
+    $raw = base64_decode($cipher, true);
+    if ($raw === false) return '';
+    $klen = strlen($key);
+    $rlen = strlen($raw);
+    $out = '';
+    for ($i = 0; $i < $rlen; $i++) {
+        $out .= chr(ord($raw[$i]) ^ ord($key[$i % $klen]));
+    }
+    return $out;
+}

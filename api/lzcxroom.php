@@ -40,6 +40,8 @@ function handle_lzcxroom(array $segments) {
     elseif ($sub === 'messages' && $method === 'GET') { require_login(); lzcx_poll_messages($code); }
     // AI 提问
     elseif ($sub === 'ask' && $method === 'POST') lzcx_ask($code);
+    // 房主绑定/更新 AI Key（房间全员共用）
+    elseif ($sub === 'ai-key' && $method === 'POST') lzcx_set_ai_key($code);
     // 房主状态机控制
     elseif ($sub === 'release-fragment' && $method === 'POST') lzcx_release_fragment($code);
     elseif ($sub === 'trigger' && $method === 'POST') lzcx_trigger($code);
@@ -66,6 +68,7 @@ function lzcx_parse_meta(string $surface, string $hostManual, string $extra): ar
         'characters'       => [],
         'tasks'            => [],
         'hidden_rules'     => [], // ['name'=>'规则六', 'condition'=>'推理出主角为人鱼']
+        'key_nodes'        => [], // 作者预定义的关键节点名列表（空=让 AI 自行拆分）
     ];
 
     $blob = $surface . "\n" . $hostManual . "\n" . $extra;
@@ -77,6 +80,29 @@ function lzcx_parse_meta(string $surface, string $hostManual, string $extra): ar
     // 初始理智
     if (preg_match('/初始理智[：:]\s*(\d+)/u', $blob, $m)) {
         $meta['initial_sanity'] = (int)$m[1];
+    }
+
+    // 关键节点：作者可在 extra/host_manual 中用「【关键节点】」段预定义
+    // 格式：
+    //   【关键节点】
+    //   1. 主角是人鱼
+    //   2. 死因是溺水
+    //   ...
+    // 也兼容「关键节点：」「关键节点:」作标题。每行一个节点。
+    if (preg_match('/【?关键节点】?\s*[：:]\s*\n([\s\S]*?)(?=\n【|\n关键节点|\n规则|\n任务|\n幻灵|\n残响|\n收容|\Z)/u', $blob, $km)) {
+        $block = $km[1];
+        $lines = explode("\n", $block);
+        foreach ($lines as $line) {
+            $t = trim($line);
+            if ($t === '') continue;
+            // 去掉行首序号 "1." "1、" "1)" "* " "- "
+            $t = preg_replace('/^[*\-]?\s*\d+[.、)]\s*/u', '', $t);
+            $t = trim($t, " *　");
+            if ($t !== '' && mb_strlen($t) <= 60) {
+                $meta['key_nodes'][] = $t;
+            }
+        }
+        $meta['key_nodes'] = array_values(array_unique($meta['key_nodes']));
     }
 
     // 角色：从 extra 字段提取「**1. 老板娘：**」「1. 老板娘：」等
@@ -123,8 +149,16 @@ function lzcx_parse_meta(string $surface, string $hostManual, string $extra): ar
 
 /**
  * 初始化灵之残响房间的状态机
+ * key_nodes:
+ *   - 作者预定义时：[['name'=>str,'hit'=>false], ...]
+ *   - 作者未定义时：[]（空数组，启用机制但让 AI 首次回答自行拆分）
+ *   - 注意：[] 与"未启用"不同。未启用由调用方决定（lzcx 默认启用）。
  */
 function lzcx_init_state(array $meta): array {
+    $keyNodes = [];
+    foreach (($meta['key_nodes'] ?? []) as $name) {
+        $keyNodes[] = ['name' => $name, 'hit' => false];
+    }
     return [
         'released_fragments' => 0,
         'total_fragments'    => $meta['total_fragments'] ?? 0,
@@ -136,6 +170,9 @@ function lzcx_init_state(array $meta): array {
         'characters_meta'    => $meta['characters'] ?? [],
         'tasks_meta'         => $meta['tasks'] ?? [],
         'hidden_rules_meta'  => $meta['hidden_rules'] ?? [],
+        // 关键节点：空数组=已启用机制但待 AI 自拆；非空=作者预定义
+        'key_nodes'          => $keyNodes,
+        'cleared'            => false, // 是否已通关（命中≥85%）
     ];
 }
 
@@ -152,6 +189,8 @@ function lzcx_load_state(array $room): array {
         'triggered_rules'    => [],
         'completed_tasks'    => [],
         'ask_count'          => 0,
+        'key_nodes'          => [],
+        'cleared'            => false,
     ];
     return $s;
 }
@@ -249,6 +288,8 @@ function lzcx_get(string $code, int $status = 200) {
 
     $room = lzcx_room_to_dict($r);
     $room['state'] = lzcx_load_state($r);
+    // 房主 key 绑定状态（仅返回布尔，不暴露 key 本身）
+    $room['has_host_key'] = !empty($r['ai_key_encrypted']);
 
     // 成员列表（含角色）
     $stmt = $pdo->prepare('SELECT rm.user_id, rm.role, rm.character_name, rm.joined_at, u.username FROM room_members rm JOIN users u ON rm.user_id = u.id WHERE rm.room_id = ? ORDER BY rm.joined_at');
@@ -444,6 +485,19 @@ function lzcx_ask(string $code) {
         json_error('AI 提问次数已达上限（' . (int)$r['ai_question_limit'] . '次）');
     }
 
+    // ===== 房主 key 共享：优先用房间绑定的加密 key bundle，没有才用前端传的 key =====
+    [$hostKey, $hostProvider, $hostBaseUrl, $hostModel] = lzcx_decode_host_key($r['ai_key_encrypted'] ?? null);
+    if ($hostKey !== '') {
+        $api_key = $hostKey;
+        // 房主绑定时一并存的 provider 配置优先（保证全员用同一套调用方式）
+        $provider = $hostProvider ?: $provider;
+        $ai_base_url = $hostBaseUrl ?: $ai_base_url;
+        $ai_model = $hostModel ?: $ai_model;
+    }
+    if ($api_key === '') {
+        json_error('本房间未绑定 AI Key，请房主在房间内绑定后再提问', 'missing_key');
+    }
+
     // 取汤（含主持人手册/其他内容，仅审核汤）
     $stmt = $pdo->prepare("SELECT surface, base, host_manual, extra FROM soups WHERE id = ? AND status = 'approved'");
     $stmt->execute([$r['soup_id']]);
@@ -478,6 +532,12 @@ function lzcx_ask(string $code) {
         $askerCharacter = $membership['character_name'];
     }
 
+    // 关键节点状态：state.key_nodes 存在则启用机制
+    // - null：旧房间未启用（向后兼容，理论上 lzcx_init_state 已默认 []）
+    // - []：启用但待 AI 自拆
+    // - [{name,hit}, ...]：已有节点列表
+    $keyNodes = array_key_exists('key_nodes', $state) ? $state['key_nodes'] : null;
+
     try {
         $answer = ask_ai_lzcx(
             $soup['surface'] ?: '',
@@ -492,7 +552,8 @@ function lzcx_ask(string $code) {
             $api_key,
             $provider,
             $ai_base_url,
-            $ai_model
+            $ai_model,
+            $keyNodes
         );
     } catch (AIError $e) {
         json_ok([
@@ -503,12 +564,68 @@ function lzcx_ask(string $code) {
         ]);
     }
 
+    // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点状态 =====
+    $justCleared = false;
+    $newHits = [];
+    if ($keyNodes !== null) {
+        // 1) 处理 NODES 标记（AI 自拆节点，仅在 key_nodes 为空时接收）
+        if (empty($state['key_nodes']) && preg_match('/<<<NODES:([^>]+?)>>>/u', $answer, $nm)) {
+            $names = array_filter(array_map('trim', explode('|', $nm[1])));
+            $names = array_values(array_unique($names));
+            if (count($names) >= 3) { // 至少 3 个才采纳，防 AI 乱输出
+                $state['key_nodes'] = array_map(fn($n) => ['name' => $n, 'hit' => false], $names);
+            }
+            $answer = str_replace($nm[0], '', $answer);
+        }
+
+        // 2) 处理 HIT 标记
+        if (preg_match('/<<<HIT:([^>]+?)>>>/u', $answer, $hm)) {
+            $hitName = trim($hm[1]);
+            foreach (($state['key_nodes'] ?? []) as &$node) {
+                if (!$node['hit'] && $node['name'] === $hitName) {
+                    $node['hit'] = true;
+                    $newHits[] = $hitName;
+                    break;
+                }
+            }
+            unset($node);
+            $answer = str_replace($hm[0], '', $answer);
+            // 兜底：剥离可能残留的其它 HIT 标记
+            $answer = preg_replace('/<<<HIT:[^>]*?>>>/u', '', $answer);
+        }
+        $answer = trim($answer);
+
+        // 3) 通关判定：命中节点数 / 总节点数 ≥ 85%
+        $nodes = $state['key_nodes'] ?? [];
+        if (!empty($nodes) && empty($state['cleared'])) {
+            $total = count($nodes);
+            $hitCount = count(array_filter($nodes, fn($n) => !empty($n['hit'])));
+            if ($total > 0 && ($hitCount / $total) >= 0.85) {
+                $state['cleared'] = true;
+                $justCleared = true;
+            }
+        }
+    }
+
     // 成功后递增 ask_count 和房间 ai_question_count
     $state['ask_count'] = (int)($state['ask_count'] ?? 0) + 1;
     lzcx_save_state((int)$r['id'], $state);
     $pdo->exec('UPDATE rooms SET ai_question_count = ai_question_count + 1 WHERE id = ' . (int)$r['id']);
 
     $a_msg = save_message($r['id'], null, 'ai_answer', $answer);
+
+    // 命中节点系统提示
+    if (!empty($newHits)) {
+        save_message($r['id'], null, 'system', '🎯 命中关键节点：' . implode('、', $newHits));
+    }
+    // 通关系统提示
+    if ($justCleared) {
+        $nodes = $state['key_nodes'] ?? [];
+        $total = count($nodes);
+        $hitCount = count(array_filter($nodes, fn($n) => !empty($n['hit'])));
+        save_message($r['id'], null, 'system', "🏆 通关！已盘出 {$hitCount}/{$total} 个关键节点（≥85%），真相大白！");
+    }
+
     json_ok([
         'question' => message_to_dict($q_msg),
         'answer' => message_to_dict($a_msg),
@@ -615,6 +732,68 @@ function lzcx_reset_state(string $code) {
     save_message($r['id'], $user, 'system', '房主重置了房间状态机（碎片/触发/任务/理智）');
 
     json_ok(['msg' => '已重置', 'state' => $state]);
+}
+
+/**
+ * 房主绑定/更新 AI Key（加密存储到 rooms.ai_key_encrypted，房间全员共用）
+ * 传 api_key 为空表示解绑（清空）。
+ */
+function lzcx_set_ai_key(string $code) {
+    $user = require_login();
+    $r = lzcx_require_room($code);
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以绑定 AI Key', 403);
+
+    $data = body_json();
+    $key = trim((string)($data['api_key'] ?? ''));
+    $provider = trim((string)($data['provider'] ?? 'deepseek'));
+    $baseUrl = trim((string)($data['base_url'] ?? ''));
+    $model = trim((string)($data['model'] ?? ''));
+
+    if ($key === '') {
+        // 解绑
+        $stmt = DB::pdo()->prepare('UPDATE rooms SET ai_key_encrypted = NULL WHERE id = ?');
+        $stmt->execute([(int)$r['id']]);
+        save_message($r['id'], $user, 'system', '房主解绑了房间 AI Key');
+        json_ok(['msg' => '已解绑', 'has_key' => false]);
+    }
+
+    if (strlen($key) > 200) json_error('AI Key 过长');
+
+    // 把 key + provider 配置一并加密存（用 JSON 包一起）
+    $bundle = json_encode([
+        'key' => $key,
+        'provider' => $provider,
+        'base_url' => $baseUrl,
+        'model' => $model,
+    ], JSON_UNESCAPED_UNICODE);
+    $encBundle = encrypt_secret($bundle);
+    if ($encBundle === null) json_error('加密失败，请稍后重试', 500);
+
+    $stmt = DB::pdo()->prepare('UPDATE rooms SET ai_key_encrypted = ? WHERE id = ?');
+    $stmt->execute([$encBundle, (int)$r['id']]);
+
+    save_message($r['id'], $user, 'system', '房主绑定了 AI Key，房间全员可共用');
+    json_ok(['msg' => '已绑定', 'has_key' => true]);
+}
+
+/**
+ * 解密房间绑定的 AI Key bundle，返回 [key, provider, base_url, model]
+ * 兼容旧版只加密 key 的格式。
+ */
+function lzcx_decode_host_key(?string $cipher): array {
+    $raw = decrypt_secret($cipher);
+    if ($raw === '') return ['', 'deepseek', '', ''];
+    $j = json_decode($raw, true);
+    if (is_array($j) && isset($j['key'])) {
+        return [
+            (string)$j['key'],
+            (string)($j['provider'] ?? 'deepseek'),
+            (string)($j['base_url'] ?? ''),
+            (string)($j['model'] ?? ''),
+        ];
+    }
+    // 旧格式：直接是 key 明文
+    return [$raw, 'deepseek', '', ''];
 }
 
 // ===================== 辅助 =====================
