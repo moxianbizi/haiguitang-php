@@ -1581,6 +1581,14 @@ input, textarea {
   line-height: 1.5;
 }
 
+/* SMTP 已设置提示 */
+.smtp-pass-set {
+  color: var(--success, #4ade80);
+  font-size: 0.78rem;
+  font-weight: normal;
+  margin-left: 6px;
+}
+
 /* Toast */
 .toast {
   position: fixed;

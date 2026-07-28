@@ -2386,12 +2386,19 @@ window.adminMsgDelete = async (id) => {
 
 // ---- 系统设置 ----
 async function adminSettings() {
-  const { ok, data } = await AdminAPI.get("/api/admin/settings");
+  // 同时拉系统设置和 SMTP 配置
+  const [resSettings, resSmtp] = await Promise.all([
+    AdminAPI.get("/api/admin/settings"),
+    AdminAPI.get("/api/admin/settings/smtp"),
+  ]);
   const c = $("#adminContent");
-  if (!ok) { c.innerHTML = `<div class="admin-error">加载失败</div>`; return; }
+  if (!resSettings.ok) { c.innerHTML = `<div class="admin-error">加载失败</div>`; return; }
 
-  const s = data.settings || {};
-  const config = data.config || {};
+  const s = resSettings.data.settings || {};
+  const config = resSettings.data.config || {};
+  const smtp = resSmtp.ok ? (resSmtp.data.smtp || {}) : {};
+  const passHasValue = smtp.mail_smtp_pass && smtp.mail_smtp_pass.has_value;
+
   c.innerHTML = `
     <div class="admin-section">
       <h2 class="admin-title">⚙️ 系统设置</h2>
@@ -2413,6 +2420,41 @@ async function adminSettings() {
           <input class="input" type="number" id="set_room_msg_limit" value="${s.room_msg_limit || config.ROOM_MSG_LIMIT || 200}" />
         </div>
         <button class="btn btn-primary" onclick="adminSettingsSave()">保存设置</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3 class="admin-subtitle">📧 SMTP 邮件配置</h3>
+      <p class="admin-hint">用于注册账号发送验证码。不配置则注册时验证码会直接显示在页面（仅开发模式）。</p>
+      <div class="admin-form">
+        <div class="admin-form-row">
+          <label>SMTP 服务器</label>
+          <input class="input" id="smtp_host" placeholder="如 smtp.qq.com / smtp.163.com / smtp.gmail.com" value="${escapeHtml(smtp.mail_smtp_host || '')}" />
+        </div>
+        <div class="admin-form-row">
+          <label>SMTP 端口</label>
+          <input class="input" type="number" id="smtp_port" placeholder="465（SSL）/ 587（STARTTLS）" value="${escapeHtml(String(smtp.mail_smtp_port || 465))}" />
+        </div>
+        <div class="admin-form-row">
+          <label>SMTP 账号</label>
+          <input class="input" id="smtp_user" placeholder="发件邮箱地址" value="${escapeHtml(smtp.mail_smtp_user || '')}" />
+        </div>
+        <div class="admin-form-row">
+          <label>SMTP 密码 / 授权码 ${passHasValue ? '<span class="smtp-pass-set">（已设置，留空表示不修改）</span>' : ''}</label>
+          <input class="input" id="smtp_pass" type="password" placeholder="${passHasValue ? '已设置，留空不修改' : '邮箱授权码（不是登录密码）'}" />
+        </div>
+        <div class="admin-form-row">
+          <label>发件邮箱（不填默认用 SMTP 账号）</label>
+          <input class="input" id="smtp_from" placeholder="如 noreply@yourdomain.com" value="${escapeHtml(smtp.mail_from || '')}" />
+        </div>
+        <div class="admin-form-row">
+          <label>发件人名称</label>
+          <input class="input" id="smtp_from_name" placeholder="海龟汤馆" value="${escapeHtml(smtp.mail_from_name || '海龟汤馆')}" />
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="adminSmtpSave()">💾 保存 SMTP 配置</button>
+          <button class="btn btn-secondary" onclick="adminSmtpTestModal()">📨 发送测试邮件</button>
+        </div>
       </div>
     </div>
 
@@ -2449,6 +2491,54 @@ window.adminSettingsSave = async () => {
   const { ok, data } = await AdminAPI.put("/api/admin/settings", body);
   if (!ok) { toast(data.error || "保存失败", "err"); return; }
   toast("设置已保存", "ok");
+};
+
+window.adminSmtpSave = async () => {
+  const body = {
+    mail_smtp_host: $("#smtp_host").value.trim(),
+    mail_smtp_port: parseInt($("#smtp_port").value) || 465,
+    mail_smtp_user: $("#smtp_user").value.trim(),
+    mail_smtp_pass: $("#smtp_pass").value, // 空字符串后端会跳过
+    mail_from: $("#smtp_from").value.trim(),
+    mail_from_name: $("#smtp_from_name").value.trim() || "海龟汤馆",
+  };
+  const { ok, data } = await AdminAPI.put("/api/admin/settings/smtp", body);
+  if (!ok) { toast(data.error || "保存失败", "err"); return; }
+  toast("SMTP 配置已保存", "ok");
+  // 重新加载以刷新密码字段状态
+  adminSettings();
+};
+
+window.adminSmtpTestModal = () => {
+  const root = $("#modalRoot");
+  if (!root) return;
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open">
+      <div class="modal-header">
+        <div><h2 class="modal-title">发送测试邮件</h2></div>
+        <button class="modal-close" onclick="closeModal(event)">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="admin-hint" style="margin-bottom:14px">使用当前已保存的 SMTP 配置，向指定邮箱发送一封测试邮件。</p>
+        <div class="field">
+          <label>收件邮箱</label>
+          <input class="input" id="smtpTestTo" type="email" placeholder="输入收件邮箱地址" />
+        </div>
+        <button class="btn btn-primary" style="width:100%" onclick="adminSmtpTestDo()">发送测试邮件</button>
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+};
+
+window.adminSmtpTestDo = async () => {
+  const to = ($("#smtpTestTo")?.value || "").trim();
+  if (!to) { toast("请填写收件邮箱", "err"); return; }
+  const { ok, data } = await AdminAPI.post("/api/admin/settings/smtp/test", { to });
+  if (!ok) { toast(data.error || "发送失败", "err"); return; }
+  toast(data.msg || "测试邮件已发送", "ok");
+  closeModal();
 };
 
 // ---- 操作日志 ----

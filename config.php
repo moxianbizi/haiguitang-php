@@ -104,6 +104,12 @@ class Config {
                 if ($k === 'allow_submit') self::$ALLOW_SUBMIT = ($v === '1');
                 elseif ($k === 'allow_register') self::$ALLOW_REGISTER = ($v === '1');
                 elseif ($k === 'room_msg_limit') self::$ROOM_MSG_LIMIT = (int)$v;
+                elseif ($k === 'mail_smtp_host') self::$MAIL_SMTP_HOST = $v;
+                elseif ($k === 'mail_smtp_port') self::$MAIL_SMTP_PORT = (int)$v;
+                elseif ($k === 'mail_smtp_user') self::$MAIL_SMTP_USER = $v;
+                elseif ($k === 'mail_smtp_pass') self::$MAIL_SMTP_PASS = $v;
+                elseif ($k === 'mail_from') self::$MAIL_FROM = $v;
+                elseif ($k === 'mail_from_name') self::$MAIL_FROM_NAME = $v;
             }
         } catch (Throwable $e) {
             // 表不存在或数据库未初始化时忽略

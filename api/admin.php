@@ -42,6 +42,10 @@ function handle_admin(array $segments) {
     elseif ($action === 'users' && $hasSeg2 && $method === 'PUT') admin_users_update((int)$segments[2]);
     elseif ($action === 'users' && $hasSeg2 && $seg3 === 'password' && $method === 'PUT') admin_users_reset_password((int)$segments[2]);
     elseif ($action === 'users' && $hasSeg2 && $method === 'DELETE') admin_users_delete((int)$segments[2]);
+    // SMTP 子路径必须放在通用 settings 之前，否则会被抢占
+    elseif ($action === 'settings' && $seg2 === 'smtp' && $seg3 === 'test' && $method === 'POST') admin_smtp_test();
+    elseif ($action === 'settings' && $seg2 === 'smtp' && $method === 'GET') admin_smtp_get();
+    elseif ($action === 'settings' && $seg2 === 'smtp' && $method === 'PUT') admin_smtp_update();
     elseif ($action === 'settings' && $method === 'GET') admin_settings_get();
     elseif ($action === 'settings' && $method === 'PUT') admin_settings_update();
     elseif ($action === 'logs' && $method === 'GET') admin_logs();
@@ -694,6 +698,130 @@ function admin_settings_update() {
     }
     log_admin_action('settings_update', '', implode(', ', $updated));
     json_ok(['msg' => '已保存', 'updated' => $updated]);
+}
+
+// ===================== SMTP 邮件配置 =====================
+
+/** SMTP 配置可写键 + 校验规则 */
+function smtp_fields(): array {
+    return [
+        'mail_smtp_host' => ['label' => 'SMTP 服务器', 'max' => 120, 'default' => ''],
+        'mail_smtp_port' => ['label' => 'SMTP 端口',    'max' => 5,   'default' => 465,  'int' => true, 'range' => [1, 65535]],
+        'mail_smtp_user' => ['label' => 'SMTP 账号',    'max' => 120, 'default' => ''],
+        'mail_smtp_pass' => ['label' => 'SMTP 密码/授权码', 'max' => 200, 'default' => ''],
+        'mail_from'      => ['label' => '发件邮箱',      'max' => 120, 'default' => ''],
+        'mail_from_name' => ['label' => '发件人名称',    'max' => 60,  'default' => '海龟汤馆'],
+    ];
+}
+
+/** 读取 SMTP 配置：密码/授权码以 has_value 布尔回显，绝不回明文 */
+function admin_smtp_get() {
+    // 优先从 settings 表读（持久化值），未设置则用 Config 默认值
+    $fields = smtp_fields();
+    $pdo = DB::pdo();
+    $stored = [];
+    try {
+        $keys = array_keys($fields);
+        $in = implode(',', array_fill(0, count($keys), '?'));
+        $stmt = $pdo->prepare("SELECT key, value FROM settings WHERE key IN ($in)");
+        $stmt->execute($keys);
+        foreach ($stmt->fetchAll() as $r) $stored[$r['key']] = $r['value'];
+    } catch (Throwable $e) {}
+
+    $out = [];
+    foreach ($fields as $k => $meta) {
+        $val = $stored[$k] ?? Config::${strtoupper($k)};
+        if ($k === 'mail_smtp_pass') {
+            $out[$k] = ['has_value' => $val !== '', 'value' => ''];
+        } else {
+            $out[$k] = $val;
+        }
+    }
+    json_ok(['smtp' => $out, 'configured' => (Config::$MAIL_SMTP_HOST !== '' && Config::$MAIL_SMTP_USER !== '')]);
+}
+
+/** 保存 SMTP 配置；密码字段为空字符串表示不改 */
+function admin_smtp_update() {
+    $data = body_json();
+    $fields = smtp_fields();
+    $pdo = DB::pdo();
+    $updated = [];
+
+    foreach ($fields as $k => $meta) {
+        if (!array_key_exists($k, $data)) continue;
+        $v = $data[$k];
+
+        // 密码字段：空字符串表示"不改"，跳过；非空则覆盖
+        if ($k === 'mail_smtp_pass' && $v === '') continue;
+
+        // 类型 + 长度校验
+        if (!empty($meta['int'])) {
+            $v = (int)$v;
+            if (isset($meta['range']) && ($v < $meta['range'][0] || $v > $meta['range'][1])) {
+                json_error($meta['label'] . " 取值范围 {$meta['range'][0]}-{$meta['range'][1]}");
+            }
+            $v = (string)$v;
+        } else {
+            $v = trim((string)$v);
+            if (mb_strlen($v) > $meta['max']) {
+                json_error($meta['label'] . " 不能超过 {$meta['max']} 字符");
+            }
+        }
+
+        // 写 settings 表 + 同步到 Config 内存
+        $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
+        $stmt->execute([$k, $v]);
+        $propName = strtoupper($k);
+        if (property_exists(Config::class, $propName)) {
+            if (!empty($meta['int'])) Config::$$propName = (int)$v;
+            else Config::$$propName = $v;
+        }
+        $updated[] = $k;
+    }
+
+    log_admin_action('smtp_update', '', implode(', ', $updated));
+    json_ok(['msg' => 'SMTP 配置已保存', 'updated' => $updated]);
+}
+
+/** 测试发信：用当前保存的 SMTP 配置发一封测试邮件到指定邮箱 */
+function admin_smtp_test() {
+    $data = body_json();
+    $to = trim($data['to'] ?? '');
+    if ($to === '' || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        json_error('请填写有效的收件邮箱');
+    }
+
+    if (Config::$MAIL_SMTP_HOST === '' || Config::$MAIL_SMTP_USER === '') {
+        json_error('请先填写并保存 SMTP 服务器和账号');
+    }
+
+    $subject = '海龟汤馆 - SMTP 测试邮件';
+    $html = <<<HTML
+<div style="font-family:sans-serif;max-width:480px;margin:auto">
+  <h2 style="color:#6ee7ff">海龟汤馆</h2>
+  <p>这是一封来自海龟汤馆后台的 SMTP 测试邮件。</p>
+  <p>如果你能收到这封邮件，说明 SMTP 配置正确。</p>
+  <p style="color:#888;font-size:0.85rem">发送时间：__TIME__</p>
+</div>
+HTML;
+    $html = str_replace('__TIME__', date('Y-m-d H:i:s'), $html);
+
+    try {
+        $sent = smtp_send(
+            Config::$MAIL_SMTP_HOST,
+            Config::$MAIL_SMTP_PORT,
+            Config::$MAIL_SMTP_USER,
+            Config::$MAIL_SMTP_PASS,
+            Config::$MAIL_FROM ?: Config::$MAIL_SMTP_USER,
+            $to, $subject, $html
+        );
+        if (!$sent) json_error('邮件发送失败（SMTP 返回失败）');
+        log_admin_action('smtp_test', $to, 'success');
+        json_ok(['msg' => "测试邮件已发送至 {$to}，请查收"]);
+    } catch (Throwable $e) {
+        log_admin_action('smtp_test', $to, 'fail: ' . $e->getMessage());
+        json_error('邮件发送失败：' . $e->getMessage());
+    }
 }
 
 // ===================== 操作日志 =====================
