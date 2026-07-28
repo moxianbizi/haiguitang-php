@@ -44,11 +44,31 @@ HTML;
 
 /** 极简 SMTP 客户端（支持 SSL 直连 465 或 STARTTLS 587） */
 function smtp_send(string $host, int $port, string $user, string $pass, string $from, string $to, string $subject, string $body): bool {
+    // OpenSSL 扩展检查（465/587 都需要）
+    if (!extension_loaded('openssl')) {
+        throw new RuntimeException('PHP 未启用 openssl 扩展，无法发送加密邮件（465/587 都需要）');
+    }
+    if ($user === '' || $pass === '') {
+        throw new RuntimeException('SMTP 账号或密码为空');
+    }
+
     $ssl = ($port == 465);
     $remote = ($ssl ? 'ssl://' : '') . $host . ':' . $port;
     $fp = @stream_socket_client($remote, $errno, $errstr, 15, STREAM_CLIENT_CONNECT);
-    if (!$fp) throw new RuntimeException($errstr ?: '连接 SMTP 失败');
+    if (!$fp) {
+        // 给出可操作的诊断信息：连接失败最常见原因是云厂商封端口 / 防火墙
+        throw new RuntimeException(
+            "连接 {$host}:{$port} 失败：{$errstr}（errno={$errno}）\n" .
+            "常见原因：\n" .
+            "1. 云服务器（阿里云/腾讯云/AWS）默认封禁 25/465/587 出口端口，需在控制台申请解封\n" .
+            "2. 服务器防火墙（iptables/ufw/安全组）未放行出站\n" .
+            "3. SMTP 主机或端口填错\n" .
+            "可在服务器上执行：nc -zv {$host} {$port}  验证连通性"
+        );
+    }
 
+    // 当前步骤名，出错时附带进异常信息便于定位
+    $step = 'connect';
     try {
         $read = function() use ($fp): string {
             $data = '';
@@ -59,36 +79,38 @@ function smtp_send(string $host, int $port, string $user, string $pass, string $
             return $data;
         };
         $write = function(string $cmd) use ($fp) { fwrite($fp, $cmd . "\r\n"); };
-        $expect = function(string $code) use ($read) {
+        $expect = function(string $code) use ($read, &$step): string {
             $resp = $read();
-            if (!str_starts_with($resp, $code)) throw new RuntimeException('SMTP: ' . trim($resp));
+            if (!str_starts_with($resp, $code)) {
+                throw new RuntimeException("SMTP [{$step}] 期望 {$code}，服务器返回：" . trim($resp));
+            }
             return $resp;
         };
 
-        $expect('220');
-        $write('EHLO haiguitang.local');
+        $step = 'banner';        $expect('220');
+        $step = 'EHLO';          $write('EHLO haiguitang.local');
         $ehlo = $expect('250');
 
         if (!$ssl && str_contains($ehlo, 'STARTTLS')) {
-            $write('STARTTLS');
+            $step = 'STARTTLS';   $write('STARTTLS');
             $expect('220');
             stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-            $write('EHLO haiguitang.local');
+            $step = 'EHLO(TLS)';  $write('EHLO haiguitang.local');
             $expect('250');
         }
 
-        $write('AUTH LOGIN');
+        $step = 'AUTH LOGIN';    $write('AUTH LOGIN');
         $expect('334');
-        $write(base64_encode($user));
+        $step = 'AUTH user';     $write(base64_encode($user));
         $expect('334');
-        $write(base64_encode($pass));
+        $step = 'AUTH pass';     $write(base64_encode($pass));
         $expect('235');
 
-        $write('MAIL FROM:<' . $from . '>');
+        $step = 'MAIL FROM';     $write('MAIL FROM:<' . $from . '>');
         $expect('250');
-        $write('RCPT TO:<' . $to . '>');
+        $step = 'RCPT TO';       $write('RCPT TO:<' . $to . '>');
         $expect('250');
-        $write('DATA');
+        $step = 'DATA';          $write('DATA');
         $expect('354');
 
         $headers = [
@@ -102,9 +124,9 @@ function smtp_send(string $host, int $port, string $user, string $pass, string $
         $msg = implode("\r\n", $headers) . "\r\n\r\n" . chunk_split(base64_encode($body));
         $write($msg);
         $write('.');
-        $expect('250');
+        $step = 'DATA end';      $expect('250');
 
-        $write('QUIT');
+        $step = 'QUIT';          $write('QUIT');
         return true;
     } finally {
         // 无论成功失败都关闭句柄，避免资源泄漏
