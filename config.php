@@ -104,6 +104,12 @@ class Config {
         self::$RATE_LIMIT_ROOM_CREATE = (int)$env('RATE_LIMIT_ROOM_CREATE', self::$RATE_LIMIT_ROOM_CREATE);
         self::$RATE_LIMIT_MSG_SEND = (int)$env('RATE_LIMIT_MSG_SEND', self::$RATE_LIMIT_MSG_SEND);
 
+        // SECRET_KEY 处理优先级：
+        // 1) 环境变量（最高优先级，立即生效）
+        // 2) settings 表持久化的值（首次启动后自动写入，保证跨请求稳定）
+        // 3) 都没有 → 生成随机值（临时用，load_from_db 时会持久化到表）
+        // 注意：settings 表此时可能还没建（DB::pdo() 尚未调用），
+        // 所以持久化逻辑放在 load_from_db() 里，那里表一定已建好。
         if (self::$SECRET_KEY === '') {
             self::$SECRET_KEY = bin2hex(random_bytes(32));
         }
@@ -130,6 +136,21 @@ class Config {
                 elseif ($k === 'mail_provider') self::$MAIL_PROVIDER = $v;
                 elseif ($k === 'resend_api_key') self::$RESEND_API_KEY = $v;
                 elseif ($k === 'resend_from') self::$RESEND_FROM = $v;
+                // SECRET_KEY：仅当未通过环境变量设置时，从表读稳定值
+                elseif ($k === 'secret_key' && getenv('SECRET_KEY') === false) {
+                    self::$SECRET_KEY = $v;
+                }
+            }
+
+            // SECRET_KEY 持久化：如果环境变量没设 + settings 表里也没有
+            // （首次部署），把当前随机生成的 SECRET_KEY 写入表，保证后续请求稳定
+            if (getenv('SECRET_KEY') === false) {
+                $check = $pdo->prepare('SELECT 1 FROM settings WHERE key = ?');
+                $check->execute(['secret_key']);
+                if (!$check->fetch()) {
+                    $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
+                    $stmt->execute(['secret_key', self::$SECRET_KEY]);
+                }
             }
         } catch (Throwable $e) {
             // 表不存在或数据库未初始化时忽略
