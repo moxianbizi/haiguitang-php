@@ -1367,7 +1367,7 @@ async function renderRoom(code) {
               ${room.ai_enabled
                 ? "看汤面 → 向 AI 提是非题 → AI 只答「是/否/无关」→ 猜出汤底。"
                 : "真人主持模式：向房主提问，房主回答「是/否/无关」。房主能看到汤底。"}
-              ${room.host?.id === store.user?.id ? " 你是房主" + (room.ai_enabled ? "，可换汤。" : "（主持人），可换汤、回答问题、标记节点。") : ""}
+              ${room.host?.id === store.user?.id ? " 你是房主" + (room.ai_enabled ? "，可换汤、查看汤底。" : "（主持人），可换汤、回答问题、标记节点。") : ""}
             </p>
           </div>
           ${room.host?.id === store.user?.id && !room.ai_enabled && soup?.base ? `
@@ -1389,6 +1389,16 @@ async function renderRoom(code) {
               </div>
             </div>
           </div>` : ""}
+          ${room.host?.id === store.user?.id && room.ai_enabled && soup?.base ? `
+          <details class="side-card host-panel host-view-base">
+            <summary>🔑 房主查看汤底（点击展开）</summary>
+            <div class="host-base" style="margin-top:12px">
+              <div class="host-base-label">汤底（仅你可见，剧透慎点）</div>
+              <div class="host-base-text">${escapeHtml(soup.base || "")}</div>
+              ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
+              ${soup.extra ? `<div class="host-base-label" style="margin-top:8px">其他内容</div><div class="host-base-text">${escapeHtml(soup.extra)}</div>` : ""}
+            </div>
+          </details>` : ""}
           ${(room.state?.key_nodes?.length || (room.ai_enabled && room.state && !room.state.cleared)) ? `
           <div class="side-card">
             <h4>🎯 关键节点 ${room.state?.key_nodes?.length ? `(${room.state.key_nodes.filter(n=>n.hit).length}/${room.state.key_nodes.length})` : ""}</h4>

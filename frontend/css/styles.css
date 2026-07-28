@@ -2728,3 +2728,28 @@ input, textarea {
   border: 1px solid rgba(138, 168, 114, 0.3);
   font-weight: 600;
 }
+
+/* AI 模式下房主折叠查看汤底 */
+details.host-view-base {
+  padding: 14px 20px;
+  cursor: pointer;
+}
+details.host-view-base > summary {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-2);
+  list-style: none;
+  outline: none;
+  user-select: none;
+}
+details.host-view-base > summary::-webkit-details-marker { display: none; }
+details.host-view-base > summary::before {
+  content: "▶ ";
+  font-size: 0.7em;
+  color: var(--text-3);
+  transition: transform 0.15s;
+  display: inline-block;
+}
+details.host-view-base[open] > summary::before {
+  content: "▼ ";
+}
