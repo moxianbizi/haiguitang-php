@@ -1335,7 +1335,7 @@ async function renderRoom(code) {
           <div class="chat-header">
             <div>
               <div class="chat-title">${escapeHtml(room.code)}</div>
-              <div class="chat-code">${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}${room.state?.cleared ? " · 已通关" : ""}</div>
+              <div class="chat-code" id="chatCodeLine">${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}${room.state?.cleared ? " · 已通关" : ""}</div>
             </div>
             <button class="btn-icon" onclick="location.hash='#/rooms'" title="离开">←</button>
           </div>
@@ -1401,7 +1401,7 @@ async function renderRoom(code) {
             </div>
           </details>` : ""}
           ${(room.state?.key_nodes?.length || (room.ai_enabled && room.state && !room.state.cleared)) ? `
-          <div class="side-card">
+          <div class="side-card" id="nodeStateBox">
             <h4>🎯 关键节点 ${room.state?.key_nodes?.length ? `(${room.state.key_nodes.filter(n=>n.hit).length}/${room.state.key_nodes.length})` : ""}</h4>
             ${room.state?.cleared ? `<p class="ai-hint" style="margin:0 0 8px;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}
             ${room.state?.key_nodes?.length
@@ -1415,7 +1415,7 @@ async function renderRoom(code) {
               : `<p class="ai-hint" style="margin:0">${room.ai_enabled ? 'AI 将在首次提问时自动拆分关键节点，命中 85% 即通关。' : '等待房主定义节点。'}</p>`}
           </div>` : ""}
           ${room.ai_enabled ? `
-          <div class="side-card">
+          <div class="side-card" id="aiKeyBox">
             <h4>AI Key（房间共用）</h4>
             ${room.has_host_key
               ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
@@ -1443,7 +1443,10 @@ async function renderRoom(code) {
   body.innerHTML = messages.map(renderMsg).join("");
   body.scrollTop = body.scrollHeight;
 
-  // 启动轮询
+  // 启动轮询：先彻底停掉旧 timer 并重置并发守卫，
+  // 避免 renderRoom 全量重渲染与旧轮询竞争导致消息重复
+  if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
+  store.pollInFlight = false;
   store.pollLastId = messages.length ? messages[messages.length - 1].id : 0;
   connectRoom(code);
 }
@@ -1516,6 +1519,56 @@ async function refreshRoomSoup(code) {
     : `<div class="no-soup">尚未选汤</div>`;
 }
 
+/**
+ * 轻量刷新房间状态：只拉房间元数据，局部更新侧栏状态卡片，
+ * 不重渲染聊天区、不打断用户输入/滚动。
+ * 用于 hostAnswer / toggleNode / bindHostKey / unbindHostKey 等状态变更后。
+ */
+async function refreshRoomState(code) {
+  const { ok, data } = await API.json(`/api/rooms/${code}`);
+  if (!ok || !data.room) return;
+  const room = data.room;
+  const state = room.state || {};
+  // 更新顶部 chat-code 状态行
+  const codeEl = $("#chatCodeLine");
+  if (codeEl) {
+    codeEl.textContent = `${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}${state.cleared ? " · 已通关" : ""}`;
+  }
+  // 更新节点卡片
+  const nodeBox = $("#nodeStateBox");
+  if (nodeBox) {
+    const nodes = state.key_nodes || [];
+    const hitCount = nodes.filter(n => n.hit).length;
+    nodeBox.innerHTML = `
+      <h4>🎯 关键节点 ${nodes.length ? `(${hitCount}/${nodes.length})` : ""}</h4>
+      ${state.cleared ? `<p class="ai-hint" style="margin:0 0 8px;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}
+      ${nodes.length
+        ? `<div class="node-list">${nodes.map((n) => `
+            <div class="node-item ${n.hit ? 'hit' : ''}">
+              <span class="node-name">${n.hit ? '✅' : '⬜'} ${escapeHtml(n.name)}</span>
+              ${room.host?.id === store.user?.id && !room.ai_enabled ? `
+                <button class="node-toggle" onclick="toggleNode('${escapeJs(n.name)}', ${!n.hit})">${n.hit ? '取消' : '标记'}</button>
+              ` : ''}
+            </div>`).join("")}</div>`
+        : `<p class="ai-hint" style="margin:0">${room.ai_enabled ? 'AI 将在首次提问时自动拆分关键节点，命中 85% 即通关。' : '等待房主定义节点。'}</p>`}
+    `;
+  }
+  // 更新 AI Key 卡片
+  const keyBox = $("#aiKeyBox");
+  if (keyBox && room.ai_enabled) {
+    keyBox.innerHTML = `
+      <h4>AI Key（房间共用）</h4>
+      ${room.has_host_key
+        ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
+        : `<p class="ai-hint" style="margin:0 0 8px"><span class="warn">⚠ 本房间尚未绑定 AI Key</span></p>`}
+      ${room.host?.id === store.user?.id && room.status !== "ended" ? `
+        <button class="btn btn-secondary" style="width:100%;margin-bottom:6px" onclick="bindHostKey('${escapeJs(room.code)}')">${room.has_host_key ? "更新 AI Key" : "绑定 AI Key"}</button>
+        ${room.has_host_key ? `<button class="btn btn-ghost" style="width:100%" onclick="unbindHostKey('${escapeJs(room.code)}')">解绑</button>` : ""}
+      ` : ""}
+    `;
+  }
+}
+
 // 聊天发送
 window.sendChat = async () => {
   const input = $("#chatInput");
@@ -1571,7 +1624,7 @@ window.hostAnswer = async (answer) => {
   const { ok, data } = await API.post(`/api/rooms/${code}/host-answer`, { answer });
   if (!ok) { toast(data.error || "回答失败", "err"); return; }
   if (data.cleared) toast("🏆 通关！", "ok");
-  renderRoom(code);
+  refreshRoomState(code);
 };
 
 window.hostAnswerCustom = async () => {
@@ -1587,7 +1640,7 @@ window.toggleNode = async (nodeName, hit) => {
   const { ok, data } = await API.post(`/api/rooms/${code}/hit-node`, { node: nodeName, hit });
   if (!ok) { toast(data.error || "操作失败", "err"); return; }
   if (data.cleared) toast("🏆 通关！", "ok");
-  renderRoom(code);
+  refreshRoomState(code);
 };
 
 // 房主绑定 AI Key 到房间（加密存后端，房间全员共用）
@@ -1609,7 +1662,7 @@ window.bindHostKey = async (code) => {
   });
   if (!ok) { toast(data.error || "绑定失败", "err"); return; }
   toast("AI Key 已绑定，房间全员可共用", "ok");
-  renderRoom(code);
+  refreshRoomState(code);
 };
 
 window.unbindHostKey = async (code) => {
@@ -1617,7 +1670,7 @@ window.unbindHostKey = async (code) => {
   const { ok, data } = await API.post(`/api/rooms/${code}/ai-key`, { api_key: "" });
   if (!ok) { toast(data.error || "解绑失败", "err"); return; }
   toast("已解绑", "ok");
-  renderRoom(code);
+  refreshRoomState(code);
 };
 
 // 房主结束房间（软关闭，保留记录，可恢复）
