@@ -1390,30 +1390,7 @@ async function renderRoom(code) {
               </div>
             </div>
           </div>` : ""}
-          ${room.host?.id === store.user?.id && room.ai_enabled && soup?.base ? `
-          <details class="side-card host-panel host-view-base">
-            <summary>🔑 房主查看汤底（点击展开）</summary>
-            <div class="host-base" style="margin-top:12px">
-              <div class="host-base-label">汤底（仅你可见，剧透慎点）</div>
-              <div class="host-base-text">${escapeHtml(soup.base || "")}</div>
-              ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
-              ${soup.extra ? `<div class="host-base-label" style="margin-top:8px">其他内容</div><div class="host-base-text">${escapeHtml(soup.extra)}</div>` : ""}
-            </div>
-          </details>` : ""}
-          ${(room.state?.key_nodes?.length || (room.ai_enabled && room.state && !room.state.cleared)) ? `
-          <div class="side-card" id="nodeStateBox">
-            <h4>🎯 关键节点 ${room.state?.key_nodes?.length ? `(${room.state.key_nodes.filter(n=>n.hit).length}/${room.state.key_nodes.length})` : ""}</h4>
-            ${room.state?.cleared ? `<p class="ai-hint" style="margin:0 0 8px;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}
-            ${room.state?.key_nodes?.length
-              ? `<div class="node-list">${room.state.key_nodes.map((n, i) => `
-                  <div class="node-item ${n.hit ? 'hit' : ''}">
-                    <span class="node-name">${n.hit ? '✅' : '⬜'} ${escapeHtml(n.name)}</span>
-                    ${room.host?.id === store.user?.id && !room.ai_enabled ? `
-                      <button class="node-toggle" onclick="toggleNode('${escapeJs(n.name)}', ${!n.hit})">${n.hit ? '取消' : '标记'}</button>
-                    ` : ''}
-                  </div>`).join("")}</div>`
-              : `<p class="ai-hint" style="margin:0">${room.ai_enabled ? 'AI 将在首次提问时自动拆分关键节点，命中 85% 即通关。' : '等待房主定义节点。'}</p>`}
-          </div>` : ""}
+          <div class="side-card" id="clearStateBox">${room.state?.cleared ? `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}</div>
           ${room.ai_enabled ? `
           <div class="side-card" id="aiKeyBox">
             <h4>AI Key（房间共用）</h4>
@@ -1451,6 +1428,17 @@ async function renderRoom(code) {
   connectRoom(code);
 }
 
+// 消息唯一 key：用内容 + 时间 + 类型计算，保证同一条消息在 DOM 里只出现一次
+function msgKey(m) {
+  const raw = (m.msg_type || "") + "|" + (m.username || "") + "|" + (m.content || "") + "|" + (m.created_at || "");
+  // 简单字符串 hash → 36 进制短串，作为 DOM 属性 key
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) {
+    h = (h * 31 + raw.charCodeAt(i)) | 0;
+  }
+  return "m" + (h >>> 0).toString(36);
+}
+
 function renderMsg(m) {
   const mine = store.user && m.username === store.user.username;
   const cls = ["msg"];
@@ -1462,7 +1450,7 @@ function renderMsg(m) {
                  m.msg_type === "host_answer" ? "🎙 " :
                  m.msg_type === "system" ? "" : "";
   const who = m.msg_type === "system" ? "" : (m.username || "游客") + " · ";
-  return `<div class="${cls.join(" ")}" data-id="${m.id}">
+  return `<div class="${cls.join(" ")}" data-key="${msgKey(m)}">
     <div class="meta">${who}${escapeHtml(m.created_at || "")}</div>
     <div class="bubble">${prefix}${escapeHtml(m.content)}</div>
   </div>`;
@@ -1496,9 +1484,10 @@ async function pollMessages(code) {
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
 
   data.messages.forEach((m) => {
-    // 按 id 去重：并发或重渲染时已存在的消息不重复插入
-    if (m.id && body.querySelector(`[data-id="${m.id}"]`)) {
-      if (m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
+    // 按 content+时间算的 key 去重：DOM 里已存在相同 key 的消息不重复插入
+    const key = msgKey(m);
+    if (body.querySelector(`[data-key="${key}"]`)) {
+      if (m.id && m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
       return;
     }
     body.insertAdjacentHTML("beforeend", renderMsg(m));
@@ -1523,35 +1512,24 @@ async function refreshRoomSoup(code) {
  * 轻量刷新房间状态：只拉房间元数据，局部更新侧栏状态卡片，
  * 不重渲染聊天区、不打断用户输入/滚动。
  * 用于 hostAnswer / toggleNode / bindHostKey / unbindHostKey 等状态变更后。
+ * 注意：关键节点列表对所有玩家隐藏，这里只更新状态行 + AI Key 卡片 + 通关提示。
  */
 async function refreshRoomState(code) {
   const { ok, data } = await API.json(`/api/rooms/${code}`);
   if (!ok || !data.room) return;
   const room = data.room;
   const state = room.state || {};
-  // 更新顶部 chat-code 状态行
+  // 更新顶部 chat-code 状态行（含通关标记，所有人可见）
   const codeEl = $("#chatCodeLine");
   if (codeEl) {
     codeEl.textContent = `${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}${state.cleared ? " · 已通关" : ""}`;
   }
-  // 更新节点卡片
-  const nodeBox = $("#nodeStateBox");
-  if (nodeBox) {
-    const nodes = state.key_nodes || [];
-    const hitCount = nodes.filter(n => n.hit).length;
-    nodeBox.innerHTML = `
-      <h4>🎯 关键节点 ${nodes.length ? `(${hitCount}/${nodes.length})` : ""}</h4>
-      ${state.cleared ? `<p class="ai-hint" style="margin:0 0 8px;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}
-      ${nodes.length
-        ? `<div class="node-list">${nodes.map((n) => `
-            <div class="node-item ${n.hit ? 'hit' : ''}">
-              <span class="node-name">${n.hit ? '✅' : '⬜'} ${escapeHtml(n.name)}</span>
-              ${room.host?.id === store.user?.id && !room.ai_enabled ? `
-                <button class="node-toggle" onclick="toggleNode('${escapeJs(n.name)}', ${!n.hit})">${n.hit ? '取消' : '标记'}</button>
-              ` : ''}
-            </div>`).join("")}</div>`
-        : `<p class="ai-hint" style="margin:0">${room.ai_enabled ? 'AI 将在首次提问时自动拆分关键节点，命中 85% 即通关。' : '等待房主定义节点。'}</p>`}
-    `;
+  // 通关提示卡片（节点列表对所有人隐藏，仅通关时显示祝贺）
+  const clearBox = $("#clearStateBox");
+  if (clearBox) {
+    clearBox.innerHTML = state.cleared
+      ? `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>`
+      : "";
   }
   // 更新 AI Key 卡片
   const keyBox = $("#aiKeyBox");
