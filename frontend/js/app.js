@@ -1414,11 +1414,18 @@ async function pollMessages(code) {
   if (!ok || !data.messages) return;
   const body = $("#chatBody");
   if (!body) return;
+  if (!data.messages.length) return; // 没有新消息，啥也别动
+
+  // 记录用户是否在底部附近：只有用户本来就在看最新消息时，
+  // 才自动滚到底部；否则保留用户当前浏览位置，避免被强制拉回底部。
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+
   data.messages.forEach((m) => {
     body.insertAdjacentHTML("beforeend", renderMsg(m));
     if (m.id && m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
   });
-  body.scrollTop = body.scrollHeight;
+
+  if (nearBottom) body.scrollTop = body.scrollHeight;
 }
 
 async function refreshRoomSoup(code) {
