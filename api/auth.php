@@ -23,12 +23,11 @@ function auth_send_code() {
     }
     if (mb_strlen($email) > 254) json_error('邮箱过长');
 
-    // 频率限制：同一邮箱 1 次/分钟，同一 IP 5 次/小时
+    // 频率限制：同一邮箱 1 次/分钟（足够防刷，邮箱是天然限流维度）
+    // 注意：不限制 IP —— NAT/CGNAT/代理后的大量用户共享同一公网 IP，
+    //       5 次/小时这种限制会导致正常用户互相挤掉。邮箱维度已足够。
     if (!rate_limit('sendcode_email_' . md5($email), 1, 60)) {
         json_error('请求过于频繁，请 1 分钟后重试', 429);
-    }
-    if (!rate_limit('sendcode_ip_' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 5, 3600)) {
-        json_error('该 IP 请求验证码过于频繁，请稍后再试', 429);
     }
 
     // 邮箱已注册则不发送（避免被刷邮件 + 防账号枚举：返回相同提示）
