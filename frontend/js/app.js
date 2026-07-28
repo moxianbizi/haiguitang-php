@@ -127,6 +127,7 @@ const store = {
   aiHistory: {},
   pollTimer: null,
   pollLastId: 0,
+  pollInFlight: false,
   currentRoomCode: null,
 };
 
@@ -1458,7 +1459,7 @@ function renderMsg(m) {
                  m.msg_type === "host_answer" ? "🎙 " :
                  m.msg_type === "system" ? "" : "";
   const who = m.msg_type === "system" ? "" : (m.username || "游客") + " · ";
-  return `<div class="${cls.join(" ")}">
+  return `<div class="${cls.join(" ")}" data-id="${m.id}">
     <div class="meta">${who}${escapeHtml(m.created_at || "")}</div>
     <div class="bubble">${prefix}${escapeHtml(m.content)}</div>
   </div>`;
@@ -1476,8 +1477,12 @@ async function pollMessages(code) {
     if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
     return;
   }
+  // 并发守卫：上一次轮询还没回来就跳过，避免并发拉到同一批消息重复渲染
+  if (store.pollInFlight) return;
+  store.pollInFlight = true;
   const since = store.pollLastId || 0;
   const { ok, data } = await API.json(`/api/rooms/${code}/messages?since=${since}`);
+  store.pollInFlight = false;
   if (!ok || !data.messages) return;
   const body = $("#chatBody");
   if (!body) return;
@@ -1488,6 +1493,11 @@ async function pollMessages(code) {
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
 
   data.messages.forEach((m) => {
+    // 按 id 去重：并发或重渲染时已存在的消息不重复插入
+    if (m.id && body.querySelector(`[data-id="${m.id}"]`)) {
+      if (m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
+      return;
+    }
     body.insertAdjacentHTML("beforeend", renderMsg(m));
     if (m.id && m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
   });

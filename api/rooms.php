@@ -362,6 +362,8 @@ function rooms_ai_question(string $code) {
     }
 
     // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点状态 =====
+    // 防御性：无论是否启用节点协议，都把 <<<NODES:...>>> / <<<HIT:...>>> 标记剥离干净，
+    // 避免 AI 误输出标记污染玩家可见内容。
     $justCleared = false;
     $newHits = [];
     if ($keyNodes !== null) {
@@ -372,7 +374,6 @@ function rooms_ai_question(string $code) {
             if (count($names) >= 3) {
                 $state['key_nodes'] = array_map(fn($n) => ['name' => $n, 'hit' => false], $names);
             }
-            $answer = str_replace($nm[0], '', $answer);
         }
         // HIT 标记
         if (preg_match('/<<<HIT:([^>]+?)>>>/u', $answer, $hm)) {
@@ -385,10 +386,7 @@ function rooms_ai_question(string $code) {
                 }
             }
             unset($node);
-            $answer = str_replace($hm[0], '', $answer);
-            $answer = preg_replace('/<<<HIT:[^>]*?>>>/u', '', $answer);
         }
-        $answer = trim($answer);
         // 通关判定
         $nodes = $state['key_nodes'] ?? [];
         if (!empty($nodes) && empty($state['cleared'])) {
@@ -399,6 +397,14 @@ function rooms_ai_question(string $code) {
                 $justCleared = true;
             }
         }
+    }
+    // 无条件剥离所有元信息标记（防御性：AI 可能在未启用时也误输出）
+    $answer = preg_replace('/<<<NODES:[^>]*?>>>/u', '', $answer);
+    $answer = preg_replace('/<<<HIT:[^>]*?>>>/u', '', $answer);
+    $answer = trim($answer);
+    // 兜底：剥离后若为空（AI 只输出了标记没有正文），给一个可读占位
+    if ($answer === '') {
+        $answer = '（主持人沉默片刻，没有作答。）';
     }
 
     // AI 调用成功后再递增提问计数（避免失败时白扣次数）
