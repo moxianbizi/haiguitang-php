@@ -27,6 +27,12 @@ class Config {
     /** 是否允许投稿（登录后任意用户） */
     public static $ALLOW_SUBMIT = true;
 
+    /** 是否允许公开注册（关闭后只能由管理员后台建号） */
+    public static $ALLOW_REGISTER = true;
+
+    /** 发件人显示名称（邮件 From 头展示用） */
+    public static $MAIL_FROM_NAME = '海龟汤馆';
+
     /** 验证码有效期（秒） */
     public static $CODE_TTL = 600;
 
@@ -73,8 +79,10 @@ class Config {
         self::$MAIL_SMTP_USER = $env('MAIL_SMTP_USER', self::$MAIL_SMTP_USER);
         self::$MAIL_SMTP_PASS = $env('MAIL_SMTP_PASS', self::$MAIL_SMTP_PASS);
         self::$MAIL_FROM = $env('MAIL_FROM', self::$MAIL_FROM);
+        self::$MAIL_FROM_NAME = $env('MAIL_FROM_NAME', self::$MAIL_FROM_NAME);
         self::$TOOL_TOKEN = $env('TOOL_TOKEN', self::$TOOL_TOKEN);
         self::$ADMIN_API_TOKEN = $env('ADMIN_API_TOKEN', self::$ADMIN_API_TOKEN);
+        self::$ALLOW_REGISTER = $env('ALLOW_REGISTER', self::$ALLOW_REGISTER ? '1' : '0') === '1';
         self::$RATE_LIMIT_AI_ASK = (int)$env('RATE_LIMIT_AI_ASK', self::$RATE_LIMIT_AI_ASK);
         self::$RATE_LIMIT_ROOM_CREATE = (int)$env('RATE_LIMIT_ROOM_CREATE', self::$RATE_LIMIT_ROOM_CREATE);
         self::$RATE_LIMIT_MSG_SEND = (int)$env('RATE_LIMIT_MSG_SEND', self::$RATE_LIMIT_MSG_SEND);
@@ -94,6 +102,7 @@ class Config {
                 $k = $r['key'];
                 $v = $r['value'];
                 if ($k === 'allow_submit') self::$ALLOW_SUBMIT = ($v === '1');
+                elseif ($k === 'allow_register') self::$ALLOW_REGISTER = ($v === '1');
                 elseif ($k === 'room_msg_limit') self::$ROOM_MSG_LIMIT = (int)$v;
             }
         } catch (Throwable $e) {

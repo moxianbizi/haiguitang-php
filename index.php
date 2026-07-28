@@ -206,6 +206,11 @@ function route_api(string $path) {
             require_once __DIR__ . '/api/rooms.php';
             handle_rooms($segments);
             break;
+        case 'lzcxroom':
+            // 灵之残响专属房间（带状态机/角色分配/多轮上下文）
+            require_once __DIR__ . '/api/lzcxroom.php';
+            handle_lzcxroom($segments);
+            break;
         case 'ai':
             require_once __DIR__ . '/api/ai.php';
             handle_ai($segments);

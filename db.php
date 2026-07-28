@@ -173,6 +173,32 @@ class DB {
         $roomCols2 = $pdo->query('PRAGMA table_info(rooms)')->fetchAll(PDO::FETCH_COLUMN, 1);
         if (!in_array('ai_ask_count', $roomCols2)) $pdo->exec('ALTER TABLE rooms ADD COLUMN ai_ask_count INTEGER DEFAULT 0');
 
+        // 迁移：rooms 表补 room_type / state（灵之残响专属房间用）
+        // room_type: normal=普通房间, lzcx=灵之残响专属房间
+        // state: JSON 字符串，存碎片/触发/任务/理智等状态机
+        $roomCols3 = $pdo->query('PRAGMA table_info(rooms)')->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('room_type', $roomCols3)) $pdo->exec("ALTER TABLE rooms ADD COLUMN room_type TEXT DEFAULT 'normal'");
+        if (!in_array('state', $roomCols3)) $pdo->exec("ALTER TABLE rooms ADD COLUMN state TEXT DEFAULT '{}'");
+        // 为灵之残响房间查询建索引
+        $pdo->exec("CREATE INDEX IF NOT EXISTS idx_rooms_type ON rooms(room_type) WHERE room_type = 'lzcx'");
+
+        // 迁移：新建 room_members 表（灵之残响房间角色分配）
+        // 复用 ON DELETE CASCADE 跟随 rooms 清理
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS room_members (
+                room_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL DEFAULT 'player',
+                character_name TEXT,
+                joined_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (room_id, user_id),
+                FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
+            CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
+        ");
+
         // 第一个注册的用户自动设为管理员（如果还没有管理员）
         $adminCount = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE is_admin = 1')->fetchColumn();
         if ($adminCount === 0) {

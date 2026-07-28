@@ -13,11 +13,99 @@ function handle_auth(array $segments) {
 }
 
 function auth_send_code() {
-    json_error('注册暂未开放，如需账号请前往交流群寻找管理员');
+    if (!Config::$ALLOW_REGISTER) {
+        json_error('注册暂未开放，如需账号请联系管理员');
+    }
+    $data = body_json();
+    $email = strtolower(trim($data['email'] ?? ''));
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        json_error('邮箱格式不正确');
+    }
+    if (mb_strlen($email) > 254) json_error('邮箱过长');
+
+    // 频率限制：同一邮箱 1 次/分钟，同一 IP 5 次/小时
+    if (!rate_limit('sendcode_email_' . md5($email), 1, 60)) {
+        json_error('请求过于频繁，请 1 分钟后重试', 429);
+    }
+    if (!rate_limit('sendcode_ip_' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 5, 3600)) {
+        json_error('该 IP 请求验证码过于频繁，请稍后再试', 429);
+    }
+
+    // 邮箱已注册则不发送（避免被刷邮件 + 防账号枚举：返回相同提示）
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT 1 FROM users WHERE email = ?');
+    $stmt->execute([$email]);
+    if ($stmt->fetch()) {
+        json_error('该邮箱已注册，请直接登录');
+    }
+
+    [$ok, $msg, $token] = send_verification_code($email);
+    if (!$ok && !Config::$MAIL_SMTP_HOST) {
+        // 开发模式：send_verification_code 会把验证码塞进 msg，方便本地调试
+        json_ok(['msg' => $msg, 'token' => $token, 'dev_mode' => true]);
+    }
+    if (!$ok) {
+        json_error($msg ?: '验证码发送失败');
+    }
+    json_ok(['msg' => $msg, 'token' => $token]);
 }
 
 function auth_register() {
-    json_error('注册暂未开放，如需账号请前往交流群寻找管理员');
+    if (!Config::$ALLOW_REGISTER) {
+        json_error('注册暂未开放，如需账号请联系管理员');
+    }
+    $data = body_json();
+    $username = trim($data['username'] ?? '');
+    $email = strtolower(trim($data['email'] ?? ''));
+    $password = (string)($data['password'] ?? '');
+    $code = trim($data['code'] ?? '');
+    $token = (string)($data['token'] ?? '');
+
+    if ($username === '' || $email === '' || $password === '' || $code === '' || $token === '') {
+        json_error('所有字段都不能为空');
+    }
+    // 用户名规则与 admin_users_create 保持一致
+    if (!preg_match('/^[\w\x{4e00}-\x{9fa5}]{2,32}$/u', $username)) {
+        json_error('用户名只能含中英文/数字/下划线，2-32 位');
+    }
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) json_error('邮箱格式不正确');
+    if (strlen($password) < 8) json_error('密码至少 8 位');
+    if (strlen($password) > 128) json_error('密码过长');
+    if (!preg_match('/^\d{6}$/', $code)) json_error('验证码格式不正确');
+
+    // 校验签名 token + 验证码
+    if (!verify_signed_code($email, $token, $code)) {
+        json_error('验证码错误或已过期');
+    }
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT id FROM users WHERE username = ? OR email = ?');
+    $stmt->execute([$username, $email]);
+    if ($stmt->fetch()) json_error('用户名或邮箱已存在', 409);
+
+    $hash = hash_password($password);
+    $stmt = $pdo->prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, 0)');
+    $stmt->execute([$username, $email, $hash]);
+    $id = (int)$pdo->lastInsertId();
+
+    // 第一个用户自动成管理员（db.php 迁移里也有兜底，这里实时执行确保新装站立即生效）
+    $adminCount = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE is_admin = 1')->fetchColumn();
+    if ($adminCount === 0) {
+        $pdo->exec('UPDATE users SET is_admin = 1 WHERE id = ' . $id);
+    }
+
+    // 自动登录
+    session_regenerate_id(true);
+    $_SESSION['user_id'] = $id;
+    $_SESSION['login_time'] = time();
+    unset($_SESSION['csrf_token']);
+
+    $is_admin = ($adminCount === 0) ? 1 : 0;
+    json_ok([
+        'user' => ['id' => $id, 'username' => $username, 'email' => $email, 'is_admin' => $is_admin],
+        'csrf_token' => csrf_token(),
+        'msg' => '注册成功，已自动登录',
+    ], 201);
 }
 
 function auth_login() {

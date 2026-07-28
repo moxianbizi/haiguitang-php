@@ -653,10 +653,12 @@ function admin_settings_get() {
         'settings' => $settings,
         'config' => [
             'ALLOW_SUBMIT' => Config::$ALLOW_SUBMIT,
+            'ALLOW_REGISTER' => Config::$ALLOW_REGISTER,
             'DEEPSEEK_MODEL' => Config::$DEEPSEEK_MODEL,
             'ROOM_MSG_LIMIT' => Config::$ROOM_MSG_LIMIT,
             'POLL_INTERVAL' => Config::$POLL_INTERVAL,
             'CODE_TTL' => Config::$CODE_TTL,
+            'MAIL_SMTP_HOST' => Config::$MAIL_SMTP_HOST ? '已配置' : '未配置',
         ],
     ]);
 }
@@ -671,6 +673,12 @@ function admin_settings_update() {
             $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
             $stmt->execute(['allow_submit', Config::$ALLOW_SUBMIT ? '1' : '0']);
             $updated[] = 'allow_submit';
+        }
+        if ($k === 'allow_register') {
+            Config::$ALLOW_REGISTER = !empty($v);
+            $stmt = $pdo->prepare('INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
+            $stmt->execute(['allow_register', Config::$ALLOW_REGISTER ? '1' : '0']);
+            $updated[] = 'allow_register';
         }
         if ($k === 'room_msg_limit') {
             $limit = (int)$v;

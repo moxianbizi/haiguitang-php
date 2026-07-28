@@ -1572,24 +1572,13 @@ input, textarea {
   text-underline-offset: 3px;
 }
 
-/* 注册关闭提示 */
-.register-notice {
-  margin-top: 20px;
-  padding: 16px;
-  border-radius: var(--radius-sm);
-  background: rgba(212, 169, 104, 0.08);
-  border: 1px solid rgba(212, 169, 104, 0.18);
+/* 注册提示 */
+.reg-hint {
+  margin-top: 12px;
+  color: var(--text-3);
+  font-size: 0.82rem;
   text-align: center;
-}
-.register-notice p {
-  margin: 4px 0;
-  color: var(--text-2);
-  font-size: 0.88rem;
   line-height: 1.5;
-}
-.register-notice p:first-child {
-  color: var(--warning);
-  font-weight: 600;
 }
 
 /* Toast */

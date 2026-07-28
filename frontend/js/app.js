@@ -1048,12 +1048,9 @@ function renderAuth() {
           <p class="sub">登录后即可创建房间、向 AI 提问</p>
           <div class="form-tabs">
             <button class="form-tab active" id="tabLogin" onclick="switchAuthTab('login')">登录</button>
+            <button class="form-tab" id="tabRegister" onclick="switchAuthTab('register')">注册</button>
           </div>
           <div id="authForm"></div>
-          <div class="register-notice">
-            <p>注册暂未开放</p>
-            <p>如需账号，请前往交流群寻找管理员</p>
-          </div>
         </div>
       </div>
       <div id="modalRoot"></div>
@@ -1063,10 +1060,15 @@ function renderAuth() {
 }
 
 let _authMode = "login";
+let _regToken = "";
+let _regCountdown = 0;
+let _regTimer = null;
 window.switchAuthTab = (mode) => {
   _authMode = mode;
   const tabLogin = $("#tabLogin");
+  const tabRegister = $("#tabRegister");
   if (tabLogin) tabLogin.classList.toggle("active", mode === "login");
+  if (tabRegister) tabRegister.classList.toggle("active", mode === "register");
   const f = $("#authForm");
   if (!f) return;
   if (mode === "login") {
@@ -1082,6 +1084,34 @@ window.switchAuthTab = (mode) => {
       </div>
       <button class="btn btn-primary" style="width:100%" onclick="doLogin()">登录</button>
     `;
+  } else if (mode === "register") {
+    f.innerHTML = `
+      <div id="formMsg"></div>
+      <div class="field">
+        <label>邮箱</label>
+        <div style="display:flex;gap:8px">
+          <input class="input" id="regEmail" type="email" placeholder="用于接收验证码" style="flex:1" onkeydown="if(event.key==='Enter')doSendCode()" />
+          <button class="btn btn-secondary" id="btnSendCode" style="flex:0 0 auto;min-width:auto;padding:0 16px" onclick="doSendCode()">获取验证码</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>验证码</label>
+        <input class="input" id="regCode" placeholder="6 位数字验证码" maxlength="6" onkeydown="if(event.key==='Enter')doRegister()" />
+      </div>
+      <div class="field">
+        <label>用户名</label>
+        <input class="input" id="regUsername" placeholder="中英文/数字/下划线，2-32 位" onkeydown="if(event.key==='Enter')doRegister()" />
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input class="input" id="regPassword" type="password" placeholder="至少 8 位" onkeydown="if(event.key==='Enter')doRegister()" />
+      </div>
+      <button class="btn btn-primary" style="width:100%" onclick="doRegister()">注册并登录</button>
+      <p class="reg-hint">首个注册的账号将自动成为管理员</p>
+    `;
+    _regToken = "";
+    _regCountdown = 0;
+    if (_regTimer) { clearInterval(_regTimer); _regTimer = null; }
   }
 };
 
@@ -1090,6 +1120,57 @@ function setFormMsg(msg, type = "err") {
   if (!m) return;
   m.innerHTML = msg ? `<div class="form-${type === "err" ? "error" : "success"}">${escapeHtml(msg)}</div>` : "";
 }
+
+window.doSendCode = async () => {
+  const email = ($("#regEmail")?.value || "").trim();
+  if (!email) { setFormMsg("请填写邮箱"); return; }
+  const btn = $("#btnSendCode");
+  if (btn) { btn.disabled = true; }
+  const { ok, data } = await API.post("/api/auth/send-code", { email });
+  if (!ok) {
+    setFormMsg(data.error || "发送失败");
+    if (btn) btn.disabled = false;
+    return;
+  }
+  // 开发模式：后端把验证码塞回 msg
+  if (data.dev_mode) {
+    setFormMsg(data.msg, "ok");
+  } else {
+    setFormMsg("验证码已发送，请查收邮箱（10 分钟内有效）", "ok");
+  }
+  _regToken = data.token || "";
+  // 60 秒倒计时
+  _regCountdown = 60;
+  if (_regTimer) clearInterval(_regTimer);
+  _regTimer = setInterval(() => {
+    _regCountdown--;
+    const b = $("#btnSendCode");
+    if (!b) { clearInterval(_regTimer); _regTimer = null; return; }
+    if (_regCountdown <= 0) {
+      b.disabled = false;
+      b.textContent = "重新获取";
+      clearInterval(_regTimer);
+      _regTimer = null;
+    } else {
+      b.textContent = `${_regCountdown}s 后重试`;
+    }
+  }, 1000);
+};
+
+window.doRegister = async () => {
+  const email = ($("#regEmail")?.value || "").trim();
+  const code = ($("#regCode")?.value || "").trim();
+  const username = ($("#regUsername")?.value || "").trim();
+  const password = $("#regPassword")?.value || "";
+  if (!email || !code || !username || !password) { setFormMsg("请填写完整"); return; }
+  if (!_regToken) { setFormMsg("请先获取验证码"); return; }
+  const { ok, data } = await API.post("/api/auth/register", { email, code, token: _regToken, username, password });
+  if (!ok) { setFormMsg(data.error || "注册失败"); return; }
+  store.user = data.user;
+  if (data.csrf_token) store.csrfToken = data.csrf_token;
+  toast("注册成功", "ok");
+  location.hash = "#/";
+};
 
 window.doLogin = async () => {
   const account = $("#loginAccount").value.trim();
@@ -2322,6 +2403,12 @@ async function adminSettings() {
           </label>
         </div>
         <div class="admin-form-row">
+          <label>
+            <input type="checkbox" id="set_allow_register" ${s.allow_register === '1' || (config.ALLOW_REGISTER !== undefined ? config.ALLOW_REGISTER : true) ? 'checked' : ''} />
+            允许公开注册（关闭后只能由管理员后台建号）
+          </label>
+        </div>
+        <div class="admin-form-row">
           <label>房间消息保留条数（0=全部）</label>
           <input class="input" type="number" id="set_room_msg_limit" value="${s.room_msg_limit || config.ROOM_MSG_LIMIT || 200}" />
         </div>
@@ -2356,6 +2443,7 @@ async function adminSettings() {
 window.adminSettingsSave = async () => {
   const body = {
     allow_submit: $("#set_allow_submit").checked,
+    allow_register: $("#set_allow_register").checked,
     room_msg_limit: parseInt($("#set_room_msg_limit").value) || 0,
   };
   const { ok, data } = await AdminAPI.put("/api/admin/settings", body);

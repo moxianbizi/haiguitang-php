@@ -266,3 +266,221 @@ function ask_ai(string $surface, string $base, string $question, string $api_key
     }
     return trim($j['choices'][0]['message']['content']);
 }
+
+/**
+ * 灵之残响专属 AI 调用
+ * 与 ask_ai 的区别：
+ *   1. 支持多轮上下文（传历史消息，AI 能记住上一题）
+ *   2. 把房间状态机（已释放碎片/已触发规则/已完成任务/剩余理智）注入 prompt
+ *   3. 带提问者角色信息，AI 按角色视角回答
+ *   4. 系统提示词追加灵之残响专属规则
+ *
+ * @param string      $surface       汤面（残响）
+ * @param string      $base          汤底（回音）
+ * @param string      $hostManual    主持人手册
+ * @param string      $extra         其他内容（收容物/残响碎片/幻灵角色视角原文）
+ * @param array       $history       历史消息 [[role=>'user'|'assistant', name=>'提问者角色', content=>'...'], ...]
+ * @param array       $state         房间状态机
+ *   - released_fragments: int   已释放碎片数（按顺序，0=未释放）
+ *   - total_fragments:     int   总碎片数（从汤面解析）
+ *   - triggered_rules:     string[]  已触发的规则名
+ *   - completed_tasks:     int[]     已完成的任务编号
+ *   - sanity:              int       剩余理智
+ *   - ask_count:           int       本房间累计提问数（用于顺序锁定的计数器）
+ * @param string      $question      本次提问
+ * @param string      $askerCharacter 提问者分配的幻灵角色名（空=上帝视角/灵探）
+ * @param string      $askerName     提问者用户名（用于多轮对话区分）
+ * @param string      $api_key       用户提供
+ * @param string      $provider
+ * @param string      $baseUrl
+ * @param string      $model
+ * @return string AI 回答
+ */
+function ask_ai_lzcx(
+    string $surface,
+    string $base,
+    string $hostManual,
+    string $extra,
+    array $history,
+    array $state,
+    string $question,
+    string $askerCharacter,
+    string $askerName,
+    string $api_key,
+    string $provider = 'deepseek',
+    string $baseUrl = '',
+    string $model = ''
+): string {
+    $api_key = trim($api_key);
+    if ($api_key === '') {
+        throw new AIError('未提供 API Key，请在页面设置中填写。', 'missing_key');
+    }
+
+    if ($baseUrl === '') $baseUrl = Config::$DEEPSEEK_BASE_URL;
+    if ($model === '')   $model   = Config::$DEEPSEEK_MODEL;
+
+    // 复用 ask_ai 的 SSRF 防护逻辑
+    $parsed = parse_url($baseUrl);
+    $host = strtolower($parsed['host'] ?? '');
+    if ($host === '') {
+        throw new AIError('API 地址无效。', 'invalid_url');
+    }
+    $hostNoBracket = trim($host, '[]');
+    if (preg_match('/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|localhost|::1|::ffff:|fe80:|fc|fd)/i', $hostNoBracket)) {
+        throw new AIError('不允许使用内网地址作为 API 地址。', 'ssrf_blocked');
+    }
+    $ip = gethostbyname($hostNoBracket);
+    if ($ip !== $hostNoBracket && filter_var($ip, FILTER_VALIDATE_IP)) {
+        $ipLong = ip2long($ip);
+        $blockedRanges = [
+            [ip2long('10.0.0.0'),     ip2long('10.255.255.255')],
+            [ip2long('172.16.0.0'),   ip2long('172.31.255.255')],
+            [ip2long('192.168.0.0'),  ip2long('192.168.255.255')],
+            [ip2long('127.0.0.0'),    ip2long('127.255.255.255')],
+            [ip2long('169.254.0.0'),  ip2long('169.254.255.255')],
+            [ip2long('100.64.0.0'),   ip2long('100.127.255.255')],
+            [ip2long('0.0.0.0'),      ip2long('0.255.255.255')],
+        ];
+        foreach ($blockedRanges as [$lo, $hi]) {
+            if ($ipLong !== false && $ipLong >= $lo && $ipLong <= $hi) {
+                throw new AIError('不允许使用内网地址作为 API 地址。', 'ssrf_blocked');
+            }
+        }
+    }
+
+    // 构造灵之残响专属系统提示词：基础提示词 + 状态机说明 + 视角规则
+    $sysExtra = "\n\n============================================================\n";
+    $sysExtra .= "【灵之残响专属规则 · 当前房间状态】\n";
+    $sysExtra .= "============================================================\n";
+    $sysExtra .= "你正在主持一局「灵之残响」多人房间，必须严格遵守以下状态约束：\n\n";
+
+    $released = (int)($state['released_fragments'] ?? 0);
+    $total    = (int)($state['total_fragments'] ?? 0);
+    $sysExtra .= "【碎片释放进度】已释放 {$released}/{$total} 片残响碎片。\n";
+    $sysExtra .= "- 仅已释放的碎片内容可以引用/暗示，未释放的碎片严禁提前剧透。\n";
+    $sysExtra .= "- 碎片按固定顺序释放，房主会手动推进，你不要主动给碎片。\n\n";
+
+    $triggered = $state['triggered_rules'] ?? [];
+    if (!is_array($triggered)) $triggered = [];
+    $sysExtra .= "【已触发的隐藏规则】" . (empty($triggered) ? '（暂无）' : implode('、', $triggered)) . "\n";
+    $sysExtra .= "- 仅当规则已在「已触发」列表中时，你才可以引用该规则揭示的真相。\n";
+    $sysExtra .= "- 未触发的规则必须保密，即便玩家已推理出对应条件，也只能用是/否/无关回答。\n\n";
+
+    $tasks = $state['completed_tasks'] ?? [];
+    if (!is_array($tasks)) $tasks = [];
+    $sysExtra .= "【已完成的任务】" . (empty($tasks) ? '（暂无）' : '任务 ' . implode(',', $tasks)) . "\n";
+    $sysExtra .= "- 任务分层按序推进，未在列表中的任务严禁判定完成或剧透后续任务。\n\n";
+
+    $sanity = (int)($state['sanity'] ?? 0);
+    if ($sanity > 0) {
+        $sysExtra .= "【剩余理智】{$sanity}\n";
+        $sysExtra .= "- 理智越低，回答可略带混乱/呓语感，但仍须据实判定。\n\n";
+    }
+
+    $askCount = (int)($state['ask_count'] ?? 0);
+    $sysExtra .= "【累计提问次数】{$askCount}\n";
+    $sysExtra .= "- 若手册指定「正-反-正-反」顺序锁定，按此计数器的奇偶决定回答方向。\n\n";
+
+    $sysExtra .= "【提问者视角】";
+    if ($askerCharacter !== '') {
+        $sysExtra .= "本次提问者分配的角色是「{$askerCharacter}」。\n";
+        $sysExtra .= "- 你必须切换到该角色视角回答，仅基于该角色可知信息作答。\n";
+        $sysExtra .= "- 超出该角色知晓范围的问题，回答「我不知道/一概不知」，不得跨界剧透。\n";
+        $sysExtra .= "- 若该角色已在汤底的「幻灵角色视角」段落中明确定义，严格按定义执行。\n";
+    } else {
+        $sysExtra .= "本次提问者未分配角色（上帝视角/灵探），按汤底全知视角回答。\n";
+    }
+    $sysExtra .= "\n【多轮上下文】下方历史消息为本局之前的提问与你的回答，请保持自洽，不要前后矛盾。\n";
+    $sysExtra .= "若发现历史中有未补答的旧问题，先补答再回答本次提问。\n";
+
+    $systemPrompt = AI_SYSTEM_PROMPT . $sysExtra;
+
+    // 构造 user content：把已释放的碎片/触发的规则作为玩家可见信息
+    $userContent = "【残响·汤面】\n{$surface}\n\n【回音·汤底（仅你可知，不可透露）】\n{$base}";
+    if ($hostManual !== '') {
+        $userContent .= "\n\n【主持人手册（你必须严格遵守）】\n{$hostManual}";
+    }
+    if ($extra !== '') {
+        $userContent .= "\n\n【其他内容（含收容物/残响碎片原文/幻灵角色视角定义，未释放的碎片仅你可读，不得主动透露）】\n{$extra}";
+    }
+
+    // 拼接已释放碎片摘要（玩家可见）
+    if ($released > 0) {
+        $userContent .= "\n\n【已释放给玩家的残响碎片】前 {$released} 片（玩家已知，可引用）";
+    } else {
+        $userContent .= "\n\n【已释放给玩家的残响碎片】暂无（玩家尚未获得任何碎片）";
+    }
+
+    // 构造 messages：system + 汤面上下文 + 历史多轮 + 本次提问
+    $messages = [
+        ['role' => 'system', 'content' => $systemPrompt],
+        ['role' => 'user', 'content' => $userContent],
+    ];
+
+    // 历史消息（最多保留最近 20 轮，避免 token 爆炸）
+    $histCount = 0;
+    foreach ($history as $h) {
+        if ($histCount >= 40) break; // 20 轮 = 40 条消息
+        $role = ($h['role'] ?? 'user') === 'assistant' ? 'assistant' : 'user';
+        $name = $h['name'] ?? '';
+        $content = $h['content'] ?? '';
+        if ($content === '') continue;
+        // 在用户消息前加上提问者标识，便于 AI 区分多人
+        if ($role === 'user' && $name !== '') {
+            $content = "【{$name}】{$content}";
+        }
+        $messages[] = ['role' => $role, 'content' => $content];
+        $histCount++;
+    }
+
+    // 本次提问
+    $qPrefix = $askerName !== '' ? "【{$askerName}" . ($askerCharacter !== '' ? "·{$askerCharacter}" : '') . "】" : '';
+    $messages[] = ['role' => 'user', 'content' => $qPrefix . $question];
+
+    $payload = [
+        'model' => $model,
+        'messages' => $messages,
+        'max_tokens' => 512,
+        'temperature' => 0.3,
+    ];
+
+    $ch = curl_init($baseUrl . '/chat/completions');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Bearer ' . $api_key,
+            'Content-Type: application/json',
+        ],
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $resp = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        if (str_contains($err, 'timed out') || str_contains($err, 'Timeout')) {
+            throw new AIError('AI 思考超时，请重试。', 'timeout');
+        }
+        throw new AIError('AI 调用失败：' . $err, 'request_error');
+    }
+    if ($status === 401) throw new AIError('API Key 无效或已过期，请检查后重新填写。', 'invalid_key');
+    if ($status === 402) throw new AIError('账户余额不足。', 'insufficient_balance');
+    if ($status >= 400) {
+        $detail = '';
+        $j = json_decode($resp, true);
+        if (is_array($j) && isset($j['error']['message'])) $detail = $j['error']['message'];
+        elseif (is_string($resp)) $detail = mb_substr($resp, 0, 120);
+        throw new AIError("AI 服务返回错误 ({$status})：{$detail}", 'upstream_error');
+    }
+
+    $j = json_decode($resp, true);
+    if (!is_array($j) || !isset($j['choices'][0]['message']['content'])) {
+        throw new AIError('AI 返回内容解析失败。', 'parse_error');
+    }
+    return trim($j['choices'][0]['message']['content']);
+}
