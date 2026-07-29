@@ -17,8 +17,10 @@ register_shutdown_function(function () {
             http_response_code(500);
         }
         error_log("Fatal error: {$e['message']} in {$e['file']}:{$e['line']}");
+        $debug = ($_SERVER['HTTP_X_DEBUG'] ?? '') === '1';
         echo json_encode([
             'error' => '服务器内部错误',
+            'debug' => $debug ? ['message' => $e['message'], 'file' => $e['file'], 'line' => $e['line']] : null,
         ], JSON_UNESCAPED_UNICODE);
     }
 });
