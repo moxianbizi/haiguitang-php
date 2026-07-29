@@ -59,12 +59,14 @@ function handle_lzcxroom(array $segments) {
     elseif ($sub === 'ask' && $method === 'POST') lzcx_ask($code);
     // 房主绑定/更新 AI Key（房间全员共用）
     elseif ($sub === 'ai-key' && $method === 'POST') lzcx_set_ai_key($code);
-    // 房主状态机控制
+    // 房主状态机控制（按钮面板，保留兼容）
     elseif ($sub === 'release-fragment' && $method === 'POST') lzcx_release_fragment($code);
     elseif ($sub === 'trigger' && $method === 'POST') lzcx_trigger($code);
     elseif ($sub === 'complete-task' && $method === 'POST') lzcx_complete_task($code);
     elseif ($sub === 'sanity' && $method === 'PUT') lzcx_set_sanity($code);
     elseif ($sub === 'reset-state' && $method === 'POST') lzcx_reset_state($code);
+    // 房主主持人指令（纯对话模式，推荐）
+    elseif ($sub === 'host-command' && $method === 'POST') lzcx_host_command($code);
     else json_error('Not Found', 404);
 }
 
@@ -746,6 +748,92 @@ function lzcx_reset_state(string $code) {
     save_message($r['id'], $user, 'system', '房主重置了房间状态机（碎片/触发/任务/理智）');
 
     json_ok(['msg' => '已重置', 'state' => $state]);
+}
+
+/**
+ * 房主主持人指令（纯对话模式）
+ * 指令格式：/动作 参数
+ * 支持：/碎片、/规则 规则名、/任务 编号、/理智 数值、/重置
+ */
+function lzcx_host_command(string $code) {
+    $user = require_login();
+    $r = lzcx_require_room($code);
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以发送主持人指令', 403);
+
+    $data = body_json();
+    $cmd = trim((string)($data['command'] ?? ''));
+    if ($cmd === '' || !str_starts_with($cmd, '/')) {
+        json_error('主持人指令需以 / 开头');
+    }
+
+    // 去掉前缀 / 并按空白切分
+    $cmd = ltrim($cmd, '/');
+    $parts = preg_split('/\s+/u', $cmd, -1, PREG_SPLIT_NO_EMPTY);
+    $action = strtolower($parts[0] ?? '');
+    $arg = trim(implode(' ', array_slice($parts, 1)));
+
+    $state = lzcx_load_state($r);
+    $msg = '';
+
+    switch ($action) {
+        case '碎片':
+        case 'fragment':
+        case '释放碎片':
+            $total = (int)($state['total_fragments'] ?? 0);
+            $released = (int)($state['released_fragments'] ?? 0);
+            if ($total > 0 && $released >= $total) json_error('所有碎片已释放完毕');
+            $state['released_fragments'] = $released + 1;
+            $msg = "主持人释放了第 {$state['released_fragments']} 片残响碎片" . ($total > 0 ? "（共 {$total}）" : '');
+            break;
+
+        case '规则':
+        case 'rule':
+        case '触发规则':
+            if ($arg === '') json_error('请填写规则名，例如 /规则 规则一');
+            if (in_array($arg, $state['triggered_rules'] ?? [], true)) json_error('该规则已触发');
+            $state['triggered_rules'][] = $arg;
+            $msg = "主持人触发了 {$arg}，对应真相已可向玩家揭示";
+            break;
+
+        case '任务':
+        case 'task':
+        case '完成任务':
+            $taskNum = (int)$arg;
+            if ($taskNum <= 0) json_error('请填写任务编号，例如 /任务 1');
+            if (in_array($taskNum, $state['completed_tasks'] ?? [], true)) json_error('该任务已完成');
+            $state['completed_tasks'][] = $taskNum;
+            sort($state['completed_tasks']);
+            $msg = "主持人标记任务 {$taskNum} 已完成";
+            break;
+
+        case '理智':
+        case 'sanity':
+        case '调整理智':
+            $sanity = (int)$arg;
+            if ($sanity < 0) json_error('理智值必须 ≥ 0');
+            $state['sanity'] = $sanity;
+            $msg = "主持人调整剩余理智为 {$sanity}";
+            break;
+
+        case '重置':
+        case 'reset':
+        case '重置状态':
+            $stmt = DB::pdo()->prepare("SELECT surface, host_manual, extra FROM soups WHERE id = ?");
+            $stmt->execute([$r['soup_id']]);
+            $soup = $stmt->fetch();
+            $meta = lzcx_parse_meta($soup['surface'] ?? '', $soup['host_manual'] ?? '', $soup['extra'] ?? '');
+            $state = lzcx_init_state($meta);
+            $msg = '主持人重置了房间状态机';
+            break;
+
+        default:
+            json_error('未知指令。支持：/碎片、/规则 规则名、/任务 编号、/理智 数值、/重置');
+    }
+
+    lzcx_save_state((int)$r['id'], $state);
+    save_message($r['id'], $user, 'system', $msg);
+
+    json_ok(['msg' => $msg, 'state' => $state]);
 }
 
 /**

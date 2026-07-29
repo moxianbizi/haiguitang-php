@@ -2910,6 +2910,7 @@ async function renderLzcxRoom(code) {
   const members = room.members || [];
   const state = room.state || {};
   store.currentRoomCode = code;
+  store.currentRoomHostId = room.host?.id ?? null;
   const isHost = room.host?.id === store.user?.id;
 
   const keyNodes = state.key_nodes || [];
@@ -2998,7 +2999,7 @@ async function renderLzcxRoom(code) {
           </div>` : ""}
           ${isHost ? `
           <div class="side-card host-panel">
-            <h4>🎙 房主控制面板</h4>
+            <h4>🎙 主持人面板</h4>
             ${!room.ai_enabled && soup?.base ? `
               <div class="host-base" style="margin-bottom:12px">
                 <div class="host-base-label">汤底（仅你可见）</div>
@@ -3006,12 +3007,13 @@ async function renderLzcxRoom(code) {
                 ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
               </div>
             ` : ""}
-            <div class="lzcx-host-btns">
-              <button id="lzcxReleaseBtn" class="btn btn-secondary" onclick="releaseLzcxFragment('${escapeJs(room.code)}')" ${(state.released_fragments || 0) >= (state.total_fragments || 0) ? "disabled" : ""}>释放碎片</button>
-              <button class="btn btn-secondary" onclick="triggerLzcxRule('${escapeJs(room.code)}')">触发规则</button>
-              <button class="btn btn-secondary" onclick="completeLzcxTask('${escapeJs(room.code)}')">完成任务</button>
-              <button class="btn btn-secondary" onclick="setLzcxSanity('${escapeJs(room.code)}')">调整理智</button>
-              <button class="btn btn-ghost" onclick="resetLzcxState('${escapeJs(room.code)}')">重置状态</button>
+            <p class="ai-hint" style="margin:0 0 8px">纯对话模式：在聊天框输入指令推进游戏。</p>
+            <div class="lzcx-host-cmds" style="font-size:0.85em;color:var(--text-3);line-height:1.7">
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/碎片</code> 释放下一片碎片</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/规则 规则名</code> 触发隐藏规则</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/任务 编号</code> 标记任务完成</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/理智 数值</code> 调整剩余理智</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/重置</code> 重置状态机</div>
             </div>
           </div>
           ` : ""}
@@ -3079,6 +3081,17 @@ window.sendLzcxChat = async () => {
   const code = store.currentRoomCode;
   if (!code) { toast("未在房间内", "err"); return; }
   input.value = "";
+  const isHost = store.user && store.currentRoomHostId === store.user.id;
+  // 房主以 / 开头的发言走主持人指令（纯对话控制状态机）
+  if (isHost && content.startsWith("/")) {
+    const { ok, data } = await API.post(`/api/lzcxroom/${code}/host-command`, { command: content });
+    if (!ok) {
+      toast(data.error || "指令失败", "err");
+      return;
+    }
+    if (data.state) refreshLzcxStateUI(code, data.state);
+    return;
+  }
   const { ok, data } = await API.post(`/api/lzcxroom/${code}/messages`, { content });
   if (!ok) toast(data.error || "发送失败", "err");
 };
