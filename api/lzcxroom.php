@@ -15,6 +15,20 @@
 // 复用 rooms.php 的辅助函数（save_message / message_to_dict / count_room_members 等）
 require_once __DIR__ . '/rooms.php';
 
+/**
+ * 灵之残响固定角色池（灵渊司成员）
+ * 注意：此处的「角色」是玩家分配的灵渊司身份，不是汤中的「幻灵角色视角」。
+ */
+const LZCX_CHARACTERS = [
+    ['name' => '减',      'dept' => '纠察处·灵探', 'ability' => '排除：消耗2理智，提出结论并进行排除'],
+    ['name' => '许复元',  'dept' => '纠察处·灵探', 'ability' => '破局：提出推理，主持人回答是/不是；若回答「不是」消耗4理智'],
+    ['name' => '辛笙',    'dept' => '纠察处·灵探', 'ability' => '心声：消耗2理智，提出两个结论，主持人告知其中绝对正确的数量'],
+    ['name' => '意马',    'dept' => '镇压所·灵契', 'ability' => '以意化灵：登场时初始理智+20%；羁绊：不与孙沐阳同场'],
+    ['name' => '柳双鱼',  'dept' => '镇压所·灵契', 'ability' => '滞时：登场时初始理智-10%；拷贝：获得碎片时额外+1'],
+    ['name' => '柳千渊',  'dept' => '重现署·灵者', 'ability' => '现！：消耗4理智获得一块碎片，不可连续发动'],
+    ['name' => '孙沐阳',  'dept' => '重现署·灵者', 'ability' => '以心为眼：每减少15理智获得一块碎片；羁绊：不与意马同场'],
+];
+
 function handle_lzcxroom(array $segments) {
     $action = $segments[1] ?? '';
     if ($action === '') {
@@ -105,26 +119,10 @@ function lzcx_parse_meta(string $surface, string $hostManual, string $extra): ar
         $meta['key_nodes'] = array_values(array_unique($meta['key_nodes']));
     }
 
-    // 角色：从 extra 字段提取「**1. 老板娘：**」「1. 老板娘：」等
-    // 注意：parse_md 会把「幻灵角色视角」标题当 marker strip 掉，所以直接在 extra 全局找
-    // 排除表格行（以 | 开头）和收容物/碎片表
-    if ($extra !== '') {
-        $lines = explode("\n", $extra);
-        foreach ($lines as $line) {
-            $t = trim($line);
-            if ($t === '' || str_starts_with($t, '|')) continue; // 跳过表格
-            // 匹配 **1. 老板娘：** 或 1. 老板娘： 或 **1、老板娘：**
-            if (preg_match('/^\*{0,2}\d+[.、]\s*([^*：:【\n]+?)[：:]/u', $t, $cm)) {
-                $c = trim($cm[1], " *　");
-                // 过滤明显不是角色的（如「任务1」「规则六」由其他段处理）
-                if ($c !== '' && !str_starts_with($c, '任务') && !str_starts_with($c, '规则')) {
-                    $meta['characters'][] = $c;
-                }
-            }
-        }
-        // 去重保序
-        $meta['characters'] = array_values(array_unique($meta['characters']));
-    }
+    // 角色：灵之残响采用固定灵渊司角色池，不按汤中「幻灵角色视角」分配。
+    // 汤中幻灵角色（老板娘、客人等）由灵者使用「幻灵」能力后临时扮演。
+    $meta['characters'] = array_column(LZCX_CHARACTERS, 'name');
+    $meta['characters_info'] = LZCX_CHARACTERS;
 
     // 任务：「任务1：XXX」「任务 1：XXX」「最终任务：XXX」
     if (preg_match_all('/(?:最终任务|任务\s*(\d))[：:]\s*([^\n]+)/u', $blob, $tm, PREG_SET_ORDER)) {
@@ -168,6 +166,7 @@ function lzcx_init_state(array $meta): array {
         'completed_tasks'    => [],
         'ask_count'          => 0,
         'characters_meta'    => $meta['characters'] ?? [],
+        'characters_info'    => $meta['characters_info'] ?? [],
         'tasks_meta'         => $meta['tasks'] ?? [],
         'hidden_rules_meta'  => $meta['hidden_rules'] ?? [],
         // 关键节点：空数组=已启用机制但待 AI 自拆；非空=作者预定义
@@ -190,9 +189,13 @@ function lzcx_load_state(array $room): array {
         'completed_tasks'    => [],
         'ask_count'          => 0,
         'characters_meta'    => [],
+        'characters_info'    => [],
         'key_nodes'          => [],
         'cleared'            => false,
     ];
+    // 角色池是全局固定的，每次加载都刷新，避免旧房间保留过期角色
+    $s['characters_meta'] = array_column(LZCX_CHARACTERS, 'name');
+    $s['characters_info'] = LZCX_CHARACTERS;
     return $s;
 }
 

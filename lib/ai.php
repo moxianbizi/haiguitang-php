@@ -1,6 +1,19 @@
 <?php
 /** AI 主持人：对接 DeepSeek，密钥由前端用户提供 */
 
+// 灵之残响固定角色池（与 api/lzcxroom.php 保持一致；若 lzcxroom.php 已加载则直接使用其常量）
+if (!defined('LZCX_CHARACTERS')) {
+    define('LZCX_CHARACTERS', [
+        ['name' => '减',      'dept' => '纠察处·灵探', 'ability' => '排除：消耗2理智，提出结论并进行排除'],
+        ['name' => '许复元',  'dept' => '纠察处·灵探', 'ability' => '破局：提出推理，主持人回答是/不是；若回答「不是」消耗4理智'],
+        ['name' => '辛笙',    'dept' => '纠察处·灵探', 'ability' => '心声：消耗2理智，提出两个结论，主持人告知其中绝对正确的数量'],
+        ['name' => '意马',    'dept' => '镇压所·灵契', 'ability' => '以意化灵：登场时初始理智+20%；羁绊：不与孙沐阳同场'],
+        ['name' => '柳双鱼',  'dept' => '镇压所·灵契', 'ability' => '滞时：登场时初始理智-10%；拷贝：获得碎片时额外+1'],
+        ['name' => '柳千渊',  'dept' => '重现署·灵者', 'ability' => '现！：消耗4理智获得一块碎片，不可连续发动'],
+        ['name' => '孙沐阳',  'dept' => '重现署·灵者', 'ability' => '以心为眼：每减少15理智获得一块碎片；羁绊：不与意马同场'],
+    ]);
+}
+
 const AI_SYSTEM_PROMPT = <<<TXT
 你是海龟汤的 AI 主持人。你的核心职责是：依据「汤底」事实，公平、自洽地回答玩家提问，并根据「主持人手册」中的特殊指令调整自己的回答格式、内容边界与行为节奏。
 
@@ -436,12 +449,30 @@ function ask_ai_lzcx(
     $sysExtra .= "【累计提问次数】{$askCount}\n";
     $sysExtra .= "- 若手册指定「正-反-正-反」顺序锁定，按此计数器的奇偶决定回答方向。\n\n";
 
-    $sysExtra .= "【提问者视角】";
-    if ($askerCharacter !== '') {
-        $sysExtra .= "本次提问者分配的角色是「{$askerCharacter}」。\n";
-        $sysExtra .= "- 你必须切换到该角色视角回答，仅基于该角色可知信息作答。\n";
-        $sysExtra .= "- 超出该角色知晓范围的问题，回答「我不知道/一概不知」，不得跨界剧透。\n";
-        $sysExtra .= "- 若该角色已在汤底的「幻灵角色视角」段落中明确定义，严格按定义执行。\n";
+    $sysExtra .= "【提问者视角 · 灵渊司角色规则】\n";
+    $charInfo = null;
+    foreach (LZCX_CHARACTERS as $c) {
+        if ($c['name'] === $askerCharacter) { $charInfo = $c; break; }
+    }
+    if ($charInfo !== null) {
+        $sysExtra .= "本次提问者：{$askerCharacter}（{$charInfo['dept']}）。能力：{$charInfo['ability']}。\n";
+        if ($charInfo['dept'] === '纠察处·灵探') {
+            $sysExtra .= "- 灵探通用能力【升维】：可直面主持人，主持人以上帝视角回答。\n";
+            if ($askerCharacter === '减') {
+                $sysExtra .= "- 【排除】：玩家提出一个结论，请判断该结论是否存在于本残响中。若不存在回答「排除成功」并给1句简短提示；若存在回答「排除失败」并给1句简短提示。\n";
+            } elseif ($askerCharacter === '许复元') {
+                $sysExtra .= "- 【破局】：玩家进行推理提问，你只能回答「是」或「不是」或「无关」，不得解释。\n";
+            } elseif ($askerCharacter === '辛笙') {
+                $sysExtra .= "- 【心声】：玩家会提出两个结论，请回答其中绝对正确的结论数量（0、1 或 2），不要逐条解释。\n";
+            }
+        } elseif ($charInfo['dept'] === '镇压所·灵契') {
+            $sysExtra .= "- 灵契无通用提问能力，玩家通常进行辅助/讨论类发言，主持人按上帝视角回答其问题。\n";
+        } elseif ($charInfo['dept'] === '重现署·灵者') {
+            $sysExtra .= "- 灵者通用能力【幻灵】：需先指定汤中幻灵角色（如老板娘、客人、死者等）并幻灵后，其他玩家才能以该角色视角提问。\n";
+            $sysExtra .= "- 若玩家当前未幻灵，提醒其先由房主/主持人确认幻灵目标；若已幻灵，你必须严格按该幻灵角色视角回答，仅回答「是」「不是」「无关」之一，不得剧透。\n";
+        }
+    } elseif ($askerCharacter !== '') {
+        $sysExtra .= "本次提问者分配了未知角色「{$askerCharacter}」，按上帝视角回答。\n";
     } else {
         $sysExtra .= "本次提问者未分配角色（上帝视角/灵探），按汤底全知视角回答。\n";
     }

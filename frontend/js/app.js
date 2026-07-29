@@ -2973,7 +2973,11 @@ async function renderLzcxRoom(code) {
                   ${isHost && m.role !== "host" && room.status !== "ended" ? `
                     <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
                       <option value="">未分配</option>
-                      ${(state.characters_meta || []).map((c) => `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+                      ${(state.characters_meta || []).map((c) => {
+                        const info = (state.characters_info || []).find((x) => x.name === c);
+                        const label = info ? `${c} · ${info.dept}` : c;
+                        return `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(label)}</option>`;
+                      }).join("")}
                     </select>
                   ` : ""}
                 </div>
@@ -3143,7 +3147,11 @@ function refreshLzcxStateUI(code, state, room) {
         ${isHost && m.role !== "host" && room.status !== "ended" ? `
           <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
             <option value="">未分配</option>
-            ${(state.characters_meta || []).map((c) => `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+            ${(state.characters_meta || []).map((c) => {
+              const info = (state.characters_info || []).find((x) => x.name === c);
+              const label = info ? `${c} · ${info.dept}` : c;
+              return `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(label)}</option>`;
+            }).join("")}
           </select>
         ` : ""}
       </div>
