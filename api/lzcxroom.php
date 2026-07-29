@@ -57,6 +57,8 @@ function handle_lzcxroom(array $segments) {
     elseif ($sub === 'messages' && $method === 'GET') { require_login(); lzcx_poll_messages($code); }
     // AI 提问
     elseif ($sub === 'ask' && $method === 'POST') lzcx_ask($code);
+    // 玩家技能（柳千渊/现！、灵者/幻灵等）
+    elseif ($sub === 'skill' && $method === 'POST') lzcx_skill($code);
     // 房主绑定/更新 AI Key（房间全员共用）
     elseif ($sub === 'ai-key' && $method === 'POST') lzcx_set_ai_key($code);
     // 房主状态机控制（按钮面板，保留兼容）
@@ -129,6 +131,11 @@ function lzcx_parse_meta(string $surface, string $hostManual, string $extra): ar
     $meta['characters'] = array_column(LZCX_CHARACTERS, 'name');
     $meta['characters_info'] = LZCX_CHARACTERS;
 
+    // 碎片图片：按顺序提取 extra 中所有 markdown 图片 URL（已在前端/md.php 转换为 /soups-img/）
+    if (preg_match_all('/!\[.*?\]\(([^)]+)\)/u', $extra, $im)) {
+        $meta['fragment_images'] = array_values(array_unique($im[1]));
+    }
+
     // 任务：「任务1：XXX」「任务 1：XXX」「最终任务：XXX」
     if (preg_match_all('/(?:最终任务|任务\s*(\d))[：:]\s*([^\n]+)/u', $blob, $tm, PREG_SET_ORDER)) {
         foreach ($tm as $t) {
@@ -174,9 +181,14 @@ function lzcx_init_state(array $meta): array {
         'characters_info'    => $meta['characters_info'] ?? [],
         'tasks_meta'         => $meta['tasks'] ?? [],
         'hidden_rules_meta'  => $meta['hidden_rules'] ?? [],
+        'fragment_images'    => $meta['fragment_images'] ?? [],
         // 关键节点：空数组=已启用机制但待 AI 自拆；非空=作者预定义
         'key_nodes'          => $keyNodes,
         'cleared'            => false, // 是否已通关（命中≥85%）
+        // 幻灵状态
+        'possessed_user_id'  => null,
+        'possessed_character'=> null,
+        'possession_sanity_deducted' => false,
     ];
 }
 
@@ -195,12 +207,24 @@ function lzcx_load_state(array $room): array {
         'ask_count'          => 0,
         'characters_meta'    => [],
         'characters_info'    => [],
+        'fragment_images'    => [],
         'key_nodes'          => [],
         'cleared'            => false,
+        'possessed_user_id'  => null,
+        'possessed_character'=> null,
     ];
     // 角色池是全局固定的，每次加载都刷新，避免旧房间保留过期角色
     $s['characters_meta'] = array_column(LZCX_CHARACTERS, 'name');
     $s['characters_info'] = LZCX_CHARACTERS;
+    // 旧房间可能缺少碎片图片列表，按需从汤源补一次
+    if (empty($s['fragment_images']) && !empty($room['soup_id'])) {
+        $stmt = DB::pdo()->prepare("SELECT extra FROM soups WHERE id = ? AND status = 'approved'");
+        $stmt->execute([(int)$room['soup_id']]);
+        $extra = $stmt->fetchColumn();
+        if ($extra && preg_match_all('/!\[.*?\]\(([^)]+)\)/u', (string)$extra, $im)) {
+            $s['fragment_images'] = array_values(array_unique($im[1]));
+        }
+    }
     return $s;
 }
 
@@ -455,6 +479,12 @@ function lzcx_send_message(string $code) {
         json_error('发送消息过于频繁，请稍后再试', 429);
     }
 
+    $state = lzcx_load_state($r);
+    // 幻灵状态下禁止主动发言（只能被他人 @ 提问）
+    if (!empty($state['possessed_user_id']) && (int)$state['possessed_user_id'] === (int)$user['id']) {
+        json_error('你正处于幻灵状态，已被禁言，等待其他玩家向你提问');
+    }
+
     $msg = save_message($r['id'], $user, 'chat', $content);
     json_ok(['message' => message_to_dict($msg)]);
 }
@@ -467,6 +497,144 @@ function lzcx_poll_messages(string $code) {
     $stmt->execute([$r['id'], $since]);
     $msgs = $stmt->fetchAll();
     json_ok(['messages' => array_map('message_to_dict', $msgs), 'last_id' => end($msgs) ? (int)end($msgs)['id'] : $since]);
+}
+
+// ===================== 玩家技能（纯对话驱动） =====================
+
+function lzcx_skill(string $code) {
+    $user = require_login();
+    $data = body_json();
+    $content = trim($data['content'] ?? '');
+    if ($content === '') json_error('技能内容不能为空');
+    validate_length($content, 500, '技能内容');
+
+    $r = lzcx_require_room($code);
+    if ($r['status'] !== 'playing') json_error('房间已结束');
+    if (!$r['soup_id']) json_error('房间里还没有选汤');
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT role, character_name FROM room_members WHERE room_id = ? AND user_id = ?');
+    $stmt->execute([$r['id'], $user['id']]);
+    $membership = $stmt->fetch();
+    if (!$membership) json_error('您不是该房间成员', 403);
+
+    $character = $membership['character_name'] ?? '';
+    if ($character === '') json_error('您还没有被分配角色，无法使用技能');
+
+    $state = lzcx_load_state($r);
+
+    // 幻灵状态下禁止普通发言/技能（只能被提问）
+    if (!empty($state['possessed_user_id']) && (int)$state['possessed_user_id'] === (int)$user['id']) {
+        json_error('你正处于幻灵状态，已被禁言，等待其他玩家向你提问');
+    }
+
+    // 解析技能指令：/技能名 [参数]
+    $cmd = ltrim($content, '/');
+    $parts = preg_split('/\s+/u', $cmd, -1, PREG_SPLIT_NO_EMPTY);
+    $skill = strtolower($parts[0] ?? '');
+    $arg = trim(implode(' ', array_slice($parts, 1)));
+
+    // 保存玩家技能宣言消息
+    save_message($r['id'], $user, 'chat', $content);
+
+    switch ($skill) {
+        case '现':
+        case '现！':
+        case 'xian':
+            if ($character !== '柳千渊') json_error('只有「柳千渊」可以发动【现！】');
+            if ((int)$state['sanity'] < 4) json_error('理智不足，无法发动【现！】');
+            $state['sanity'] -= 4;
+            $state['released_fragments'] = (int)($state['released_fragments'] ?? 0) + 1;
+            lzcx_save_state((int)$r['id'], $state);
+
+            $fragIdx = max(0, (int)$state['released_fragments'] - 1);
+            $fragUrl = $state['fragment_images'][$fragIdx] ?? null;
+            $fragMarkdown = $fragUrl ? "![碎片]({$fragUrl})" : '';
+
+            save_message($r['id'], $user, 'system', "柳千渊发动了【现！】，消耗4理智，获得一片残响碎片。");
+
+            // AI 主持人描述碎片
+            $answer = lzcx_ai_fragment_desc($r, $user, $state, $fragIdx, $fragUrl, $character);
+            $a_msg = save_message($r['id'], null, 'ai_answer', $answer);
+
+            json_ok([
+                'message' => message_to_dict($a_msg),
+                'state' => $state,
+                'skill' => 'xian',
+            ]);
+
+        case '幻灵':
+        case 'huanling':
+        case 'possess':
+            if (!in_array($character, ['柳千渊', '孙沐阳'], true)) {
+                json_error('只有「重现署·灵者」可以发动【幻灵】');
+            }
+            if ((int)$state['sanity'] < 5) json_error('理智不足，无法发动【幻灵】');
+            if ($arg === '') json_error('请指定幻灵角色，例如 /幻灵 老板娘');
+
+            $state['sanity'] -= 5;
+            $state['possessed_user_id'] = (int)$user['id'];
+            $state['possessed_character'] = $arg;
+            lzcx_save_state((int)$r['id'], $state);
+
+            save_message($r['id'], $user, 'system', "{$user['username']}（{$character}）发动【幻灵】，化身为「{$arg}」，已被禁言。其他玩家可 @{$user['username']} 向其提问，主持人会以「{$arg}」的身份回答。");
+
+            json_ok([
+                'state' => $state,
+                'skill' => 'huanling',
+            ]);
+
+        default:
+            json_error('未知技能。当前支持：/现、/幻灵 角色名');
+    }
+}
+
+/**
+ * 调用 AI 主持人描述刚释放的碎片
+ */
+function lzcx_ai_fragment_desc(array $r, array $user, array $state, int $fragIdx, ?string $fragUrl, string $character): string {
+    if (empty($r['ai_enabled'])) {
+        return $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片（暂无图片）';
+    }
+
+    [$api_key, $provider, $baseUrl, $model] = lzcx_decode_host_key($r['ai_key_encrypted'] ?? null);
+    if ($api_key === '') {
+        return $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片（暂无图片）';
+    }
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare("SELECT surface, base, host_manual, extra FROM soups WHERE id = ? AND status = 'approved'");
+    $stmt->execute([$r['soup_id']]);
+    $soup = $stmt->fetch();
+    if (!$soup) return $fragUrl ? "![碎片]({$fragUrl})" : '';
+
+    $history = [];
+    $fragDesc = $fragUrl ? "图片 URL：{$fragUrl}" : '无图片';
+    $prompt = "你是灵之残响的 AI 主持人。玩家「{$user['username']}」扮演「{$character}」，刚刚发动了技能【现！】，消耗4理智获得第 " . ($fragIdx + 1) . " 片残响碎片。\n" .
+              "请以主持人的口吻，简短描述这片碎片呈现的内容，并自然地把碎片图片展示给所有玩家。\n" .
+              "{$fragDesc}\n" .
+              "注意：直接输出 markdown 图片语法 ![碎片](图片URL)，不要泄露汤底真相，只描述碎片表面内容。";
+
+    try {
+        return ask_ai_lzcx(
+            $soup['surface'] ?: '',
+            $soup['base'] ?? '',
+            $soup['host_manual'] ?? '',
+            $soup['extra'] ?? '',
+            $history,
+            $state,
+            $prompt,
+            '',
+            'AI主持人',
+            $api_key,
+            $provider,
+            $baseUrl,
+            $model,
+            null
+        );
+    } catch (Throwable $e) {
+        return $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片';
+    }
 }
 
 // ===================== AI 提问（核心） =====================
@@ -526,6 +694,25 @@ function lzcx_ask(string $code) {
     // 加载状态机
     $state = lzcx_load_state($r);
 
+    // 幻灵状态处理
+    $possessedUsername = null;
+    $possessedCharacter = null;
+    if (!empty($state['possessed_user_id'])) {
+        if ((int)$state['possessed_user_id'] === (int)$user['id']) {
+            json_error('你正处于幻灵状态，已被禁言，等待其他玩家向你提问');
+        }
+        $stmt = $pdo->prepare('SELECT u.username FROM room_members rm JOIN users u ON rm.user_id = u.id WHERE rm.room_id = ? AND rm.user_id = ?');
+        $stmt->execute([$r['id'], (int)$state['possessed_user_id']]);
+        $possessedUsername = $stmt->fetchColumn() ?: null;
+        $possessedCharacter = $state['possessed_character'] ?? '';
+    }
+
+    // 若提问 @了幻灵玩家，主持人以幻灵角色回答
+    $aiContent = $content;
+    if ($possessedUsername && $possessedCharacter && str_contains($content, '@' . $possessedUsername)) {
+        $aiContent = "[向幻灵角色「{$possessedCharacter}」（玩家 @{$possessedUsername}）提问] " . $content . "\n\n请主持人以「{$possessedCharacter}」的身份回答，只能用「是」「不是」或「是也不是」回答，不要泄露其他信息。";
+    }
+
     // 取最近 N 条 ai_question + ai_answer 作为多轮上下文
     $stmt = $pdo->prepare("SELECT msg_type, username, content FROM messages WHERE room_id = ? AND msg_type IN ('ai_question','ai_answer') ORDER BY id DESC LIMIT 40");
     $stmt->execute([$r['id']]);
@@ -539,7 +726,7 @@ function lzcx_ask(string $code) {
         }
     }
 
-    // 保存提问
+    // 保存提问（仍用原始内容展示）
     $q_msg = save_message($r['id'], $user, 'ai_question', $content);
 
     // 提问者角色：房主=host（全知），player 用 character_name
@@ -562,7 +749,7 @@ function lzcx_ask(string $code) {
             $soup['extra'] ?? '',
             $history,
             $state,
-            $content,
+            $aiContent,
             $askerCharacter,
             $user['username'],
             $api_key,

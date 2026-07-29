@@ -2936,13 +2936,17 @@ async function renderLzcxRoom(code) {
           </div>
           <div class="chat-body" id="chatBody"></div>
           ${room.status === "ended" ? `<div class="chat-ended-notice">房间已结束，无法继续发言</div>` : ""}
-          <div class="chat-input">
-            <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendLzcxChat()" ${room.status === "ended" ? "disabled" : ""} />
-            <button class="btn btn-secondary" onclick="sendLzcxChat()" title="发送" ${room.status === "ended" ? "disabled" : ""}>💬</button>
-            ${room.status !== "ended" && room.ai_enabled
-              ? `<button class="btn btn-primary" onclick="sendLzcxAsk()" title="向AI提问" ${room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit ? "disabled" : ""}>🤖</button>`
-              : ""}
-          </div>
+          ${(() => {
+            const isPossessed = state.possessed_user_id && state.possessed_user_id === store.user?.id;
+            const disabled = room.status === "ended" || isPossessed;
+            return `<div class="chat-input">
+              <input id="chatInput" placeholder="${isPossessed ? "你正处于幻灵状态，等待他人向你提问" : "发言…"}" onkeydown="if(event.key==='Enter')sendLzcxChat()" ${disabled ? "disabled" : ""} />
+              <button class="btn btn-secondary" onclick="sendLzcxChat()" title="发送" ${disabled ? "disabled" : ""}>💬</button>
+              ${room.status !== "ended" && !isPossessed && room.ai_enabled
+                ? `<button class="btn btn-primary" onclick="sendLzcxAsk()" title="向AI提问" ${room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit ? "disabled" : ""}>🤖</button>`
+                : ""}
+            </div>`;
+          })()}
         </div>
         <div class="room-side">
           <div class="side-card">
@@ -2953,14 +2957,17 @@ async function renderLzcxRoom(code) {
               <div class="surface">${escapeHtml(soup?.surface || "")}</div>
             </div>
           </div>
+          ${isHost ? `
           <div class="side-card">
-            <h4>房间状态</h4>
-            <div class="lzcx-stat-row"><span>理智</span><span id="lzcxSanityVal">${state.sanity ?? "-"}/${state.initial_sanity ?? "-"}</span></div>
-            <div class="lzcx-stat-row"><span>碎片</span><span id="lzcxFragmentVal">${state.released_fragments ?? 0}/${state.total_fragments ?? 0}</span></div>
-            <div class="lzcx-stat-row"><span>节点</span><span id="lzcxNodeVal">${nodeProgress}</span></div>
-            <div id="lzcxRulesBox">${state.triggered_rules?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已触发规则</span>${state.triggered_rules.map((r) => `<span class="lzcx-tag">${escapeHtml(r)}</span>`).join("")}</div>` : ""}</div>
-            <div id="lzcxTasksBox">${state.completed_tasks?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已完成任务</span>${state.completed_tasks.map((t) => `<span class="lzcx-tag">任务${escapeHtml(String(t))}</span>`).join("")}</div>` : ""}</div>
+            <h4 style="cursor:pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">房间状态 ▾</h4>
+            <div>
+              <div class="lzcx-stat-row"><span>理智</span><span id="lzcxSanityVal">${state.sanity ?? "-"}/${state.initial_sanity ?? "-"}</span></div>
+              <div class="lzcx-stat-row"><span>碎片</span><span id="lzcxFragmentVal">${state.released_fragments ?? 0}/${state.total_fragments ?? 0}</span></div>
+              <div id="lzcxRulesBox" style="display:none">${state.triggered_rules?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已触发规则</span>${state.triggered_rules.map((r) => `<span class="lzcx-tag">${escapeHtml(r)}</span>`).join("")}</div>` : ""}</div>
+              <div id="lzcxTasksBox" style="display:none">${state.completed_tasks?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已完成任务</span>${state.completed_tasks.map((t) => `<span class="lzcx-tag">任务${escapeHtml(String(t))}</span>`).join("")}</div>` : ""}</div>
+            </div>
           </div>
+          ` : ""}
           <div class="side-card">
             <h4>成员 <span style="font-weight:400;color:var(--text-3)">(${members.length}人)</span></h4>
             <div class="lzcx-members" id="lzcxMembersBox">
@@ -3087,6 +3094,16 @@ window.sendLzcxChat = async () => {
     const { ok, data } = await API.post(`/api/lzcxroom/${code}/host-command`, { command: content });
     if (!ok) {
       toast(data.error || "指令失败", "err");
+      return;
+    }
+    if (data.state) refreshLzcxStateUI(code, data.state);
+    return;
+  }
+  // 玩家以 / 开头的发言走技能接口（现！、幻灵等）
+  if (!isHost && content.startsWith("/")) {
+    const { ok, data } = await API.post(`/api/lzcxroom/${code}/skill`, { content });
+    if (!ok) {
+      toast(data.error || "技能发动失败", "err");
       return;
     }
     if (data.state) refreshLzcxStateUI(code, data.state);
