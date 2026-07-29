@@ -172,6 +172,7 @@ function lzcx_init_state(array $meta): array {
     return [
         'released_fragments' => 0,
         'total_fragments'    => $meta['total_fragments'] ?? 0,
+        'base_initial_sanity'=> $meta['initial_sanity'] ?? 0,
         'initial_sanity'     => $meta['initial_sanity'] ?? 0,
         'sanity'             => $meta['initial_sanity'] ?? 0,
         'triggered_rules'    => [],
@@ -188,7 +189,8 @@ function lzcx_init_state(array $meta): array {
         // 幻灵状态
         'possessed_user_id'  => null,
         'possessed_character'=> null,
-        'possession_sanity_deducted' => false,
+        // 孙沐阳被动累计
+        'sun_muyang_last_lost' => 0,
     ];
 }
 
@@ -200,6 +202,7 @@ function lzcx_load_state(array $room): array {
     $s += [
         'released_fragments' => 0,
         'total_fragments'    => 0,
+        'base_initial_sanity'=> 0,
         'initial_sanity'     => 0,
         'sanity'             => 0,
         'triggered_rules'    => [],
@@ -212,6 +215,7 @@ function lzcx_load_state(array $room): array {
         'cleared'            => false,
         'possessed_user_id'  => null,
         'possessed_character'=> null,
+        'sun_muyang_last_lost' => 0,
     ];
     // 角色池是全局固定的，每次加载都刷新，避免旧房间保留过期角色
     $s['characters_meta'] = array_column(LZCX_CHARACTERS, 'name');
@@ -446,7 +450,29 @@ function lzcx_assign_character(string $code) {
         : "房主取消了 {$tu['username']} 的角色";
     save_message($r['id'], $user, 'system', $msg);
 
-    json_ok(['msg' => '已分配']);
+    // 角色被动：意马 +20% 初始理智，柳双鱼 -10% 初始理智
+    $state = lzcx_load_state($r);
+    $state = lzcx_recalc_initial_sanity((int)$r['id'], $state);
+    lzcx_save_state((int)$r['id'], $state);
+
+    json_ok(['msg' => '已分配', 'state' => $state]);
+}
+
+/** 根据当前房间角色重新计算初始理智（意马+20%，柳双鱼-10%） */
+function lzcx_recalc_initial_sanity(int $roomId, array $state): array {
+    $base = (int)($state['base_initial_sanity'] ?? $state['initial_sanity'] ?? 0);
+    if ($base <= 0) return $state;
+
+    $multiplier = 1.0;
+    if (lzcx_has_character_in_room($roomId, '意马')) $multiplier += 0.2;
+    if (lzcx_has_character_in_room($roomId, '柳双鱼')) $multiplier -= 0.1;
+
+    $newInitial = (int)round($base * $multiplier);
+    $state['base_initial_sanity'] = $base;
+    $state['initial_sanity'] = $newInitial;
+    // 登场时重置为新的初始理智
+    $state['sanity'] = $newInitial;
+    return $state;
 }
 
 function lzcx_members(string $code) {
@@ -538,6 +564,71 @@ function lzcx_skill(string $code) {
     save_message($r['id'], $user, 'chat', $content);
 
     switch ($skill) {
+        case '排除':
+        case 'exclude':
+            if ($character !== '减') json_error('只有「减」可以发动【排除】');
+            if ((int)$state['sanity'] < 2) json_error('理智不足，无法发动【排除】');
+            if ($arg === '') json_error('请给出要排除的结论，例如 /排除 凶手是老板娘');
+            $state['sanity'] -= 2;
+            lzcx_save_state((int)$r['id'], $state);
+
+            $answer = lzcx_ai_judge($r, $user, $state, $character, 'exclude', $arg);
+            $success = false;
+            if (preg_match('/<<<EXCLUDE:(成功|失败)>>>/u', $answer, $m)) {
+                $success = $m[1] === '成功';
+                $answer = str_replace($m[0], '', $answer);
+            }
+            $answer = trim($answer);
+            save_message($r['id'], $user, 'system', "减发动了【排除】，消耗2理智。结论「{$arg}」" . ($success ? '排除成功' : '排除失败') . "。");
+            $a_msg = save_message($r['id'], null, 'ai_answer', $answer ?: "结论「{$arg}」" . ($success ? '排除成功' : '排除失败') . "。");
+
+            json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'exclude']);
+
+        case '破局':
+        case 'poju':
+            if ($character !== '许复元') json_error('只有「许复元」可以发动【破局】');
+            if ($arg === '') json_error('请给出推理，例如 /破局 凶手是老板娘');
+
+            $answer = lzcx_ai_judge($r, $user, $state, $character, 'poju', $arg);
+            $result = '';
+            if (preg_match('/<<<RESULT:(是|不是|是也不是)>>>/u', $answer, $m)) {
+                $result = $m[1];
+                $answer = str_replace($m[0], '', $answer);
+            }
+            $answer = trim($answer);
+
+            // 若回答为「不是」消耗4理智
+            if ($result === '不是') {
+                $state['sanity'] = max(0, (int)$state['sanity'] - 4);
+                lzcx_save_state((int)$r['id'], $state);
+            }
+
+            save_message($r['id'], $user, 'system', "许复元发动了【破局】。主持人回答：{$result}" . ($result === '不是' ? '，许复元消耗4理智' : '') . "。");
+            $a_msg = save_message($r['id'], null, 'ai_answer', $answer ?: "主持人回答：{$result}。");
+
+            json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'poju']);
+
+        case '心声':
+        case 'xinsheng':
+            if ($character !== '辛笙') json_error('只有「辛笙」可以发动【心声】');
+            if ((int)$state['sanity'] < 2) json_error('理智不足，无法发动【心声】');
+            if ($arg === '') json_error('请给出两个结论，用「；」分隔，例如 /心声 凶手是老板娘；死者是自杀');
+            $state['sanity'] -= 2;
+            lzcx_save_state((int)$r['id'], $state);
+
+            $answer = lzcx_ai_judge($r, $user, $state, $character, 'xinsheng', $arg);
+            $count = null;
+            if (preg_match('/<<<COUNT:(\d+)>>>/u', $answer, $m)) {
+                $count = (int)$m[1];
+                $answer = str_replace($m[0], '', $answer);
+            }
+            $answer = trim($answer);
+
+            save_message($r['id'], $user, 'system', "辛笙发动了【心声】，消耗2理智。两个结论中绝对正确的数量为：" . ($count !== null ? $count : '未知') . "。");
+            $a_msg = save_message($r['id'], null, 'ai_answer', $answer ?: "绝对正确的结论数量：" . ($count !== null ? $count : '未知') . "。");
+
+            json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'xinsheng']);
+
         case '现':
         case '现！':
         case 'xian':
@@ -545,23 +636,37 @@ function lzcx_skill(string $code) {
             if ((int)$state['sanity'] < 4) json_error('理智不足，无法发动【现！】');
             $state['sanity'] -= 4;
             $state['released_fragments'] = (int)($state['released_fragments'] ?? 0) + 1;
+
+            // 柳双鱼拷贝：若柳双鱼在场且还有剩余碎片，额外释放一张
+            $copyMessage = '';
+            $totalFragments = (int)($state['total_fragments'] ?? 0);
+            if (lzcx_has_character_in_room($r['id'], '柳双鱼')) {
+                if ($totalFragments === 0 || (int)$state['released_fragments'] < $totalFragments) {
+                    $state['released_fragments'] += 1;
+                    $copyMessage = '柳双鱼发动【拷贝】，额外复制了一张碎片。';
+                }
+            }
+
             lzcx_save_state((int)$r['id'], $state);
+
+            // 孙沐阳被动：每减少15理智获得一块碎片
+            $sunExtra = lzcx_check_sun_muyang_reward($r, $user, $state);
+            if ($sunExtra) {
+                $state = $sunExtra['state'];
+            }
 
             $fragIdx = max(0, (int)$state['released_fragments'] - 1);
             $fragUrl = $state['fragment_images'][$fragIdx] ?? null;
-            $fragMarkdown = $fragUrl ? "![碎片]({$fragUrl})" : '';
+            $fragAnswer = $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片（暂无图片）';
 
-            save_message($r['id'], $user, 'system', "柳千渊发动了【现！】，消耗4理智，获得一片残响碎片。");
+            $systemMsg = "柳千渊发动了【现！】，消耗4理智，获得一片残响碎片。";
+            if ($copyMessage) $systemMsg .= ' ' . $copyMessage;
+            if ($sunExtra) $systemMsg .= " {$sunExtra['message']}";
+            save_message($r['id'], $user, 'system', $systemMsg);
 
-            // AI 主持人描述碎片
-            $answer = lzcx_ai_fragment_desc($r, $user, $state, $fragIdx, $fragUrl, $character);
-            $a_msg = save_message($r['id'], null, 'ai_answer', $answer);
+            $a_msg = save_message($r['id'], null, 'ai_answer', $fragAnswer);
 
-            json_ok([
-                'message' => message_to_dict($a_msg),
-                'state' => $state,
-                'skill' => 'xian',
-            ]);
+            json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'xian']);
 
         case '幻灵':
         case 'huanling':
@@ -579,41 +684,64 @@ function lzcx_skill(string $code) {
 
             save_message($r['id'], $user, 'system', "{$user['username']}（{$character}）发动【幻灵】，化身为「{$arg}」，已被禁言。其他玩家可 @{$user['username']} 向其提问，主持人会以「{$arg}」的身份回答。");
 
-            json_ok([
-                'state' => $state,
-                'skill' => 'huanling',
-            ]);
+            json_ok(['state' => $state, 'skill' => 'huanling']);
 
         default:
-            json_error('未知技能。当前支持：/现、/幻灵 角色名');
+            json_error('未知技能。当前支持：/排除、/破局、/心声、/现、/幻灵 角色名');
     }
 }
 
+/** 判断房间中是否有某个灵渊司角色 */
+function lzcx_has_character_in_room(int $roomId, string $characterName): bool {
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT 1 FROM room_members WHERE room_id = ? AND character_name = ?');
+    $stmt->execute([$roomId, $characterName]);
+    return (bool)$stmt->fetch();
+}
+
 /**
- * 调用 AI 主持人描述刚释放的碎片
+ * 通用 AI 技能判定。
+ * 要求 AI 在回答第一行输出结果标记：
+ *   /排除 → <<<EXCLUDE:成功>>> 或 <<<EXCLUDE:失败>>>
+ *   /破局 → <<<RESULT:是>>> / <<<RESULT:不是>>> / <<<RESULT:是也不是>>>
+ *   /心声 → <<<COUNT:0>>> / <<<COUNT:1>>> / <<<COUNT:2>>>
  */
-function lzcx_ai_fragment_desc(array $r, array $user, array $state, int $fragIdx, ?string $fragUrl, string $character): string {
+function lzcx_ai_judge(array $r, array $user, array $state, string $character, string $skill, string $arg): string {
     if (empty($r['ai_enabled'])) {
-        return $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片（暂无图片）';
+        return lzcx_fallback_judge($skill, $arg);
     }
 
     [$api_key, $provider, $baseUrl, $model] = lzcx_decode_host_key($r['ai_key_encrypted'] ?? null);
     if ($api_key === '') {
-        return $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片（暂无图片）';
+        return lzcx_fallback_judge($skill, $arg);
     }
 
     $pdo = DB::pdo();
     $stmt = $pdo->prepare("SELECT surface, base, host_manual, extra FROM soups WHERE id = ? AND status = 'approved'");
     $stmt->execute([$r['soup_id']]);
     $soup = $stmt->fetch();
-    if (!$soup) return $fragUrl ? "![碎片]({$fragUrl})" : '';
+    if (!$soup) return lzcx_fallback_judge($skill, $arg);
 
-    $history = [];
-    $fragDesc = $fragUrl ? "图片 URL：{$fragUrl}" : '无图片';
-    $prompt = "你是灵之残响的 AI 主持人。玩家「{$user['username']}」扮演「{$character}」，刚刚发动了技能【现！】，消耗4理智获得第 " . ($fragIdx + 1) . " 片残响碎片。\n" .
-              "请以主持人的口吻，简短描述这片碎片呈现的内容，并自然地把碎片图片展示给所有玩家。\n" .
-              "{$fragDesc}\n" .
-              "注意：直接输出 markdown 图片语法 ![碎片](图片URL)，不要泄露汤底真相，只描述碎片表面内容。";
+    $prompts = [
+        'exclude' => "玩家「{$user['username']}」扮演「减」，发动技能【排除】，消耗2理智。\n" .
+                     "结论：「{$arg}」\n" .
+                     "请判断该残响中是否存在本结论。\n" .
+                     "第一行必须输出结果标记：<<<EXCLUDE:成功>>>（不存在，排除成功）或 <<<EXCLUDE:失败>>>（存在，排除失败）。\n" .
+                     "第二行起用主持人口吻简短说明，不要泄露汤底。",
+        'poju' => "玩家「{$user['username']}」扮演「许复元」，发动技能【破局】。\n" .
+                  "推理：「{$arg}」\n" .
+                  "请站在上帝视角判断该推理是否正确。\n" .
+                  "第一行必须输出结果标记：<<<RESULT:是>>>、<<<RESULT:不是>>> 或 <<<RESULT:是也不是>>>。\n" .
+                  "第二行起用主持人口吻简短说明，不要泄露汤底。",
+        'xinsheng' => "玩家「{$user['username']}」扮演「辛笙」，发动技能【心声】，消耗2理智。\n" .
+                      "两个结论：「{$arg}」\n" .
+                      "请判断其中绝对正确的结论数量。\n" .
+                      "第一行必须输出结果标记：<<<COUNT:0>>>、<<<COUNT:1>>> 或 <<<COUNT:2>>>。\n" .
+                      "第二行起用主持人口吻简短说明，不要泄露汤底。",
+    ];
+
+    $prompt = $prompts[$skill] ?? '';
+    if ($prompt === '') return lzcx_fallback_judge($skill, $arg);
 
     try {
         return ask_ai_lzcx(
@@ -621,11 +749,11 @@ function lzcx_ai_fragment_desc(array $r, array $user, array $state, int $fragIdx
             $soup['base'] ?? '',
             $soup['host_manual'] ?? '',
             $soup['extra'] ?? '',
-            $history,
+            [],
             $state,
             $prompt,
-            '',
-            'AI主持人',
+            $character,
+            $user['username'],
             $api_key,
             $provider,
             $baseUrl,
@@ -633,8 +761,51 @@ function lzcx_ai_fragment_desc(array $r, array $user, array $state, int $fragIdx
             null
         );
     } catch (Throwable $e) {
-        return $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片';
+        return lzcx_fallback_judge($skill, $arg);
     }
+}
+
+/** AI 未启用或无 Key 时的兜底判定（随机/保守） */
+function lzcx_fallback_judge(string $skill, string $arg): string {
+    switch ($skill) {
+        case 'exclude':
+            return '<<<EXCLUDE:失败>>> 该结论无法排除（AI 未启用，请主持人人工判定）。';
+        case 'poju':
+            return '<<<RESULT:是也不是>>> 该推理部分正确（AI 未启用，请主持人人工判定）。';
+        case 'xinsheng':
+            return '<<<COUNT:1>>> 两个结论中有一个绝对正确（AI 未启用，请主持人人工判定）。';
+        default:
+            return '';
+    }
+}
+
+/**
+ * 孙沐阳被动【以心为眼】：每减少15理智获得一块碎片。
+ * 返回 null 或 ['state'=>..., 'message'=>...]
+ */
+function lzcx_check_sun_muyang_reward(array $r, array $user, array $state): ?array {
+    if (!lzcx_has_character_in_room((int)$r['id'], '孙沐阳')) return null;
+
+    $initial = (int)($state['initial_sanity'] ?? 0);
+    $current = (int)($state['sanity'] ?? 0);
+    $lost = $initial - $current;
+    $threshold = 15;
+    $prevLost = (int)($state['sun_muyang_last_lost'] ?? 0);
+    $count = intdiv(max(0, $lost), $threshold) - intdiv(max(0, $prevLost), $threshold);
+
+    if ($count <= 0) return null;
+
+    $msgParts = [];
+    for ($i = 0; $i < $count; $i++) {
+        $total = (int)($state['total_fragments'] ?? 0);
+        if ($total > 0 && (int)$state['released_fragments'] >= $total) break;
+        $state['released_fragments'] = (int)($state['released_fragments'] ?? 0) + 1;
+        $msgParts[] = "孙沐阳发动【以心为眼】，累计理智减少达到阈值，获得第 " . ($state['released_fragments']) . " 片碎片。";
+    }
+    $state['sun_muyang_last_lost'] = $lost;
+    lzcx_save_state((int)$r['id'], $state);
+
+    return ['state' => $state, 'message' => implode(' ', $msgParts)];
 }
 
 // ===================== AI 提问（核心） =====================
@@ -1013,8 +1184,32 @@ function lzcx_host_command(string $code) {
             $msg = '主持人重置了房间状态机';
             break;
 
+        case '分配':
+        case 'assign':
+            // 格式：/分配 @玩家 角色名
+            $arg2 = preg_replace('/^@/u', '', $arg);
+            $aparts = preg_split('/\s+/u', trim($arg2), 2, PREG_SPLIT_NO_EMPTY);
+            $targetUsername = $aparts[0] ?? '';
+            $targetCharacter = $aparts[1] ?? '';
+            if ($targetUsername === '' || $targetCharacter === '') {
+                json_error('格式：/分配 @玩家 角色名');
+            }
+            $stmt = $pdo->prepare('SELECT u.id FROM users u JOIN room_members rm ON rm.user_id = u.id WHERE rm.room_id = ? AND u.username = ?');
+            $stmt->execute([$r['id'], $targetUsername]);
+            $targetUser = $stmt->fetch();
+            if (!$targetUser) json_error('目标玩家不存在或不在房间内');
+
+            $stmt = $pdo->prepare('UPDATE room_members SET character_name = ? WHERE room_id = ? AND user_id = ?');
+            $stmt->execute([$targetCharacter, $r['id'], (int)$targetUser['id']]);
+
+            $state = lzcx_load_state($r);
+            $state = lzcx_recalc_initial_sanity((int)$r['id'], $state);
+
+            $msg = "主持人分配 {$targetUsername} 扮演角色「{$targetCharacter}」";
+            break;
+
         default:
-            json_error('未知指令。支持：/碎片、/规则 规则名、/任务 编号、/理智 数值、/重置');
+            json_error('未知指令。支持：/碎片、/规则 规则名、/任务 编号、/理智 数值、/重置、/分配 @玩家 角色名');
     }
 
     lzcx_save_state((int)$r['id'], $state);

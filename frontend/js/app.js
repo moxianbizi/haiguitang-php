@@ -2957,28 +2957,40 @@ async function renderLzcxRoom(code) {
               <div class="surface">${escapeHtml(soup?.surface || "")}</div>
             </div>
           </div>
-          ${isHost ? `
           <div class="side-card">
-            <h4 style="cursor:pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">房间状态 ▾</h4>
-            <div>
-              <div class="lzcx-stat-row"><span>理智</span><span id="lzcxSanityVal">${state.sanity ?? "-"}/${state.initial_sanity ?? "-"}</span></div>
-              <div class="lzcx-stat-row"><span>碎片</span><span id="lzcxFragmentVal">${state.released_fragments ?? 0}/${state.total_fragments ?? 0}</span></div>
-              <div id="lzcxRulesBox" style="display:none">${state.triggered_rules?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已触发规则</span>${state.triggered_rules.map((r) => `<span class="lzcx-tag">${escapeHtml(r)}</span>`).join("")}</div>` : ""}</div>
-              <div id="lzcxTasksBox" style="display:none">${state.completed_tasks?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已完成任务</span>${state.completed_tasks.map((t) => `<span class="lzcx-tag">任务${escapeHtml(String(t))}</span>`).join("")}</div>` : ""}</div>
-            </div>
+            <h4>剩余理智</h4>
+            <div style="font-size:1.6em;font-weight:600;color:var(--accent)">${state.sanity ?? "-"}<span style="font-size:0.6em;color:var(--text-3);margin-left:4px">/ ${state.initial_sanity ?? "-"}</span></div>
+            ${!isHost ? `<p class="ai-hint" style="margin:8px 0 0;font-size:0.85em">在聊天框输入 / 可使用角色技能。</p>` : ""}
           </div>
-          ` : ""}
-          <div class="side-card">
-            <h4>成员 <span style="font-weight:400;color:var(--text-3)">(${members.length}人)</span></h4>
-            <div class="lzcx-members" id="lzcxMembersBox">
+          ${isHost ? `
+          <div class="side-card host-panel">
+            <h4>🎙 主持人面板</h4>
+            ${!room.ai_enabled && soup?.base ? `
+              <div class="host-base" style="margin-bottom:12px">
+                <div class="host-base-label">汤底（仅你可见）</div>
+                <div class="host-base-text">${escapeHtml(soup.base || "")}</div>
+                ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
+              </div>
+            ` : ""}
+            <p class="ai-hint" style="margin:0 0 8px">纯对话模式：在聊天框输入指令推进游戏。</p>
+            <div class="lzcx-host-cmds" style="font-size:0.85em;color:var(--text-3);line-height:1.7;margin-bottom:12px">
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/碎片</code> 释放下一片碎片</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/规则 规则名</code> 触发隐藏规则</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/任务 编号</code> 标记任务完成</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/理智 数值</code> 调整剩余理智</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/重置</code> 重置状态机</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/分配 @玩家 角色名</code> 分配角色</div>
+            </div>
+            <h4 style="font-size:0.95em;margin:0 0 8px">成员与角色</h4>
+            <div class="lzcx-members" id="lzcxMembersBox" style="margin-bottom:8px">
               ${members.map((m) => `
-                <div class="lzcx-member">
+                <div class="lzcx-member" style="align-items:center">
                   <div class="lzcx-member-name">
                     ${escapeHtml(m.username)}
                     ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
                     ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
                   </div>
-                  ${isHost && m.role !== "host" && room.status !== "ended" ? `
+                  ${m.role !== "host" && room.status !== "ended" ? `
                     <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
                       <option value="">未分配</option>
                       ${(state.characters_meta || []).map((c) => {
@@ -2992,43 +3004,9 @@ async function renderLzcxRoom(code) {
               `).join("")}
             </div>
           </div>
-          ${state.cleared ? `<div class="side-card" id="lzcxClearBox"><p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p></div>` : ""}
-          ${room.ai_enabled ? `
-          <div class="side-card" id="lzcxKeyBox">
-            <h4>AI Key（房间共用）</h4>
-            ${room.has_host_key
-              ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
-              : `<p class="ai-hint" style="margin:0 0 8px"><span class="warn">⚠ 本房间尚未绑定 AI Key</span></p>`}
-            ${isHost && room.status !== "ended" ? `
-              <button class="btn btn-secondary" style="width:100%;margin-bottom:6px" onclick="bindLzcxHostKey('${escapeJs(room.code)}')">${room.has_host_key ? "更新 AI Key" : "绑定 AI Key"}</button>
-              ${room.has_host_key ? `<button class="btn btn-ghost" style="width:100%" onclick="unbindLzcxHostKey('${escapeJs(room.code)}')">解绑</button>` : ""}
-            ` : ""}
-          </div>` : ""}
-          ${isHost ? `
-          <div class="side-card host-panel">
-            <h4>🎙 主持人面板</h4>
-            ${!room.ai_enabled && soup?.base ? `
-              <div class="host-base" style="margin-bottom:12px">
-                <div class="host-base-label">汤底（仅你可见）</div>
-                <div class="host-base-text">${escapeHtml(soup.base || "")}</div>
-                ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
-              </div>
-            ` : ""}
-            <p class="ai-hint" style="margin:0 0 8px">纯对话模式：在聊天框输入指令推进游戏。</p>
-            <div class="lzcx-host-cmds" style="font-size:0.85em;color:var(--text-3);line-height:1.7">
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/碎片</code> 释放下一片碎片</div>
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/规则 规则名</code> 触发隐藏规则</div>
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/任务 编号</code> 标记任务完成</div>
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/理智 数值</code> 调整剩余理智</div>
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/重置</code> 重置状态机</div>
-            </div>
-          </div>
-          ` : ""}
-          ${isHost ? `
           <div class="side-card">
             <h4>房间管理</h4>
-            <p class="ai-hint" style="margin:0 0 10px">房主可解散当前房间。</p>
-            <button class="btn btn-danger" style="width:100%" onclick="dissolveLzcxRoom('${escapeJs(room.code)}')">解散房间（永久删除）</button>
+            <button class="btn btn-danger" style="width:100%" onclick="dissolveLzcxRoom('${escapeJs(room.code)}')">解散房间</button>
           </div>
           ` : ""}
         </div>
