@@ -85,7 +85,7 @@ function admin_stats() {
     $recent_users = $pdo->query('SELECT id, username, email, is_admin, is_banned, created_at FROM users ORDER BY id DESC LIMIT 10')->fetchAll();
 
     // 最新房间
-    $recent_rooms = $pdo->query("SELECT r.id, r.code, r.status, r.created_at, u.username AS host_name FROM rooms r LEFT JOIN users u ON r.host_id = u.id ORDER BY r.id DESC LIMIT 10")->fetchAll();
+    $recent_rooms = $pdo->query("SELECT r.id, r.code, r.status, r.room_type, r.created_at, u.username AS host_name FROM rooms r LEFT JOIN users u ON r.host_id = u.id ORDER BY r.id DESC LIMIT 10")->fetchAll();
 
     json_ok([
         'users_total' => $users_total,
@@ -580,7 +580,7 @@ function admin_rooms_list() {
     $stmt->execute($params);
     $total = (int)$stmt->fetchColumn();
 
-    $stmt = $pdo->prepare("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.created_at, u.username AS host_name, s.title AS soup_title $sql ORDER BY r.id DESC LIMIT :offset, :limit");
+    $stmt = $pdo->prepare("SELECT r.id, r.code, r.host_id, r.soup_id, r.status, r.ai_enabled, r.room_type, r.created_at, u.username AS host_name, s.title AS soup_title $sql ORDER BY r.id DESC LIMIT :offset, :limit");
     $stmt->bindValue(':offset', ($page - 1) * $perPage, PDO::PARAM_INT);
     $stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
     foreach ($params as $i => $p) {

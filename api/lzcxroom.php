@@ -189,6 +189,7 @@ function lzcx_load_state(array $room): array {
         'triggered_rules'    => [],
         'completed_tasks'    => [],
         'ask_count'          => 0,
+        'characters_meta'    => [],
         'key_nodes'          => [],
         'cleared'            => false,
     ];
@@ -281,7 +282,8 @@ function lzcx_list() {
 
 function lzcx_get(string $code, int $status = 200) {
     $pdo = DB::pdo();
-    $stmt = $pdo->prepare("SELECT r.*, u.username AS host_name, s.title AS soup_title, s.surface, s.season FROM rooms r LEFT JOIN users u ON r.host_id = u.id LEFT JOIN soups s ON r.soup_id = s.id WHERE r.code = ? AND r.room_type = 'lzcx'");
+    $user = current_user();
+    $stmt = $pdo->prepare("SELECT r.*, u.username AS host_name, s.title AS soup_title, s.surface, s.season, s.base, s.host_manual, s.extra FROM rooms r LEFT JOIN users u ON r.host_id = u.id LEFT JOIN soups s ON r.soup_id = s.id WHERE r.code = ? AND r.room_type = 'lzcx'");
     $stmt->execute([$code]);
     $r = $stmt->fetch();
     if (!$r) json_error('灵之残响房间不存在', 404);
@@ -296,7 +298,8 @@ function lzcx_get(string $code, int $status = 200) {
     $stmt->execute([$r['id']]);
     $room['members'] = $stmt->fetchAll();
 
-    // 汤（仅返回汤面/系列/标题，汤底不返给玩家）
+    // 汤：玩家只看汤面；房主额外看汤底/手册/补充内容
+    $isHost = $user && (int)$r['host_id'] === (int)$user['id'];
     $soup = null;
     if ($r['soup_id']) {
         $soup = [
@@ -305,6 +308,11 @@ function lzcx_get(string $code, int $status = 200) {
             'season' => $r['season'],
             'surface' => $r['surface'],
         ];
+        if ($isHost) {
+            $soup['base'] = $r['base'] ?? '';
+            $soup['host_manual'] = $r['host_manual'] ?? '';
+            $soup['extra'] = $r['extra'] ?? '';
+        }
     }
 
     // 最近消息

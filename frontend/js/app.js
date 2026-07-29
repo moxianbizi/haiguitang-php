@@ -218,6 +218,7 @@ function route() {
   if (hash === "/rooms") return renderRooms();
   if (hash === "/square") return renderSquare();
   if (hash.startsWith("/room/")) return renderRoom(hash.slice("/room/".length));
+  if (hash.startsWith("/lzcxroom/")) return renderLzcxRoom(hash.slice("/lzcxroom/".length));
   if (hash.startsWith("/soup/")) return renderSoupPage(hash.slice("/soup/".length));
   if (hash.startsWith("/user/")) return renderUserPage(hash.slice("/user/".length));
   if (hash === "/profile") return renderProfile();
@@ -1319,6 +1320,12 @@ async function renderRoom(code) {
   if (!store.user) { toast("请先登录", "err"); location.hash = "#/auth"; return; }
   const { ok, data } = await API.json(`/api/rooms/${code}`);
   if (!ok) {
+    // 普通房间不存在 → 尝试灵之残响房间（兼容后台开的测试房通过 #/room/XXX 进入）
+    const lzcx = await API.json(`/api/lzcxroom/${code}`);
+    if (lzcx.ok) {
+      location.hash = "#/lzcxroom/" + code;
+      return;
+    }
     $("#app").innerHTML = `<div class="page">${headerHtml("rooms")}<div class="empty"><div class="empty-icon">🎮</div><p>${escapeHtml(data.error || "房间不存在")}</p><button class="btn btn-secondary" style="margin-top:16px" onclick="location.hash='#/rooms'">返回大厅</button></div></div>`;
     return;
   }
@@ -2119,7 +2126,7 @@ async function adminDashboard() {
           ${(data.recent_rooms || []).map(r => `
             <tr>
               <td>${r.id}</td>
-              <td><a href="#/room/${escapeHtml(r.code)}">${escapeHtml(r.code)}</a></td>
+              <td><a href="${r.room_type === 'lzcx' ? '#/lzcxroom/' : '#/room/'}${escapeHtml(r.code)}">${escapeHtml(r.code)}</a></td>
               <td>${escapeHtml(r.host_name || '-')}</td>
               <td>${r.status === 'playing' ? '<span class="tag tag-success">进行中</span>' : '<span class="tag tag-muted">已结束</span>'}</td>
               <td>${escapeHtml(r.created_at)}</td>
@@ -2491,6 +2498,7 @@ async function adminRooms(page = 1) {
       <div class="admin-toolbar">
         <h2 class="admin-title">🎮 房间管理</h2>
         <div class="admin-toolbar-right">
+          <button class="btn btn-secondary admin-btn-sm" onclick="openLzcxTestRoomModal()">🌙 开灵之残响测试房</button>
           <input class="input admin-search" id="adminSearch" placeholder="搜索房间号/房主…" value="${escapeHtml(q)}" onkeydown="if(event.key==='Enter')adminRooms(1)" />
           <select class="input admin-select" id="adminStatusFilter" onchange="adminRooms(1)">
             <option value="">全部状态</option>
@@ -2501,12 +2509,13 @@ async function adminRooms(page = 1) {
         </div>
       </div>
       <table class="admin-table">
-        <thead><tr><th>ID</th><th>房间号</th><th>房主</th><th>汤</th><th>状态</th><th>AI</th><th>创建时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>ID</th><th>房间号</th><th>类型</th><th>房主</th><th>汤</th><th>状态</th><th>AI</th><th>创建时间</th><th>操作</th></tr></thead>
         <tbody>
           ${data.rooms.map(r => `
             <tr>
               <td>${r.id}</td>
-              <td><a href="#/room/${escapeHtml(r.code)}">${escapeHtml(r.code)}</a></td>
+              <td><a href="${r.room_type === 'lzcx' ? '#/lzcxroom/' : '#/room/'}${escapeHtml(r.code)}">${escapeHtml(r.code)}</a></td>
+              <td>${r.room_type === 'lzcx' ? '<span class="tag tag-info">灵之残响</span>' : '<span class="tag tag-muted">普通</span>'}</td>
               <td>${escapeHtml(r.host_name || '-')}</td>
               <td>${escapeHtml(r.soup_title || '-')}</td>
               <td>${r.status === 'playing' ? '<span class="tag tag-success">进行中</span>' : '<span class="tag tag-muted">已结束</span>'}</td>
@@ -2881,6 +2890,445 @@ function adminPagination(page, totalPages, fnName) {
   if (page < totalPages) btns.push(`<button class="admin-page-btn" onclick="${fnName}(${page + 1})">下一页</button>`);
   return `<div class="admin-pagination">${btns.join('')}</div>`;
 }
+
+// ---------- 灵之残响专属房间 ----------
+
+async function renderLzcxRoom(code) {
+  if (!store.user) { toast("请先登录", "err"); location.hash = "#/auth"; return; }
+  // 自动加入（已在则不重复加）
+  await API.post(`/api/lzcxroom/${code}/join`, {});
+  const { ok, data } = await API.json(`/api/lzcxroom/${code}`);
+  if (!ok) {
+    $("#app").innerHTML = `<div class="page">${headerHtml("rooms")}<div class="empty"><div class="empty-icon">🎮</div><p>${escapeHtml(data.error || "房间不存在")}</p><button class="btn btn-secondary" style="margin-top:16px" onclick="location.hash='#/rooms'">返回大厅</button></div></div>`;
+    return;
+  }
+  const room = data.room;
+  const soup = data.soup;
+  const messages = data.messages || [];
+  const members = room.members || [];
+  const state = room.state || {};
+  store.currentRoomCode = code;
+  const isHost = room.host?.id === store.user?.id;
+
+  const keyNodes = state.key_nodes || [];
+  const hitCount = keyNodes.filter((n) => n.hit).length;
+  const nodeProgress = keyNodes.length ? `${hitCount}/${keyNodes.length}` : "待AI拆分";
+
+  $("#app").innerHTML = `
+    <div class="page">
+      ${headerHtml("rooms")}
+      <div class="container room-layout">
+        <div class="chat-panel">
+          <div class="chat-header">
+            <div>
+              <div class="chat-title">${escapeHtml(room.code)} <span style="color:var(--accent);font-size:0.85em">[灵之残响]</span></div>
+              <div class="chat-code" id="lzcxCodeLine">
+                ${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}
+                ${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}
+                ${room.member_limit > 0 ? ` · 人数 ${members.length}/${room.member_limit}` : ""}
+                ${state.cleared ? " · 已通关" : ""}
+              </div>
+            </div>
+            <button class="btn-icon" onclick="location.hash='#/rooms'" title="离开">←</button>
+          </div>
+          <div class="chat-body" id="chatBody"></div>
+          ${room.status === "ended" ? `<div class="chat-ended-notice">房间已结束，无法继续发言</div>` : ""}
+          <div class="chat-input">
+            <input id="chatInput" placeholder="发言…" onkeydown="if(event.key==='Enter')sendLzcxChat()" ${room.status === "ended" ? "disabled" : ""} />
+            <button class="btn btn-secondary" onclick="sendLzcxChat()" title="发送" ${room.status === "ended" ? "disabled" : ""}>💬</button>
+            ${room.status !== "ended" && room.ai_enabled
+              ? `<button class="btn btn-primary" onclick="sendLzcxAsk()" title="向AI提问" ${room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit ? "disabled" : ""}>🤖</button>`
+              : ""}
+          </div>
+        </div>
+        <div class="room-side">
+          <div class="side-card">
+            <h4>当前残响</h4>
+            <div class="soup-mini">
+              <div class="t">${escapeHtml(soup?.title || "尚未选汤")}</div>
+              <div class="s">${escapeHtml(soup?.season || "")}${soup?.episode ? " · " + escapeHtml(soup.episode) : ""}</div>
+              <div class="surface">${escapeHtml(soup?.surface || "")}</div>
+            </div>
+          </div>
+          <div class="side-card">
+            <h4>房间状态</h4>
+            <div class="lzcx-stat-row"><span>理智</span><span id="lzcxSanityVal">${state.sanity ?? "-"}/${state.initial_sanity ?? "-"}</span></div>
+            <div class="lzcx-stat-row"><span>碎片</span><span id="lzcxFragmentVal">${state.released_fragments ?? 0}/${state.total_fragments ?? 0}</span></div>
+            <div class="lzcx-stat-row"><span>节点</span><span id="lzcxNodeVal">${nodeProgress}</span></div>
+            <div id="lzcxRulesBox">${state.triggered_rules?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已触发规则</span>${state.triggered_rules.map((r) => `<span class="lzcx-tag">${escapeHtml(r)}</span>`).join("")}</div>` : ""}</div>
+            <div id="lzcxTasksBox">${state.completed_tasks?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已完成任务</span>${state.completed_tasks.map((t) => `<span class="lzcx-tag">任务${escapeHtml(String(t))}</span>`).join("")}</div>` : ""}</div>
+          </div>
+          <div class="side-card">
+            <h4>成员 <span style="font-weight:400;color:var(--text-3)">(${members.length}人)</span></h4>
+            <div class="lzcx-members" id="lzcxMembersBox">
+              ${members.map((m) => `
+                <div class="lzcx-member">
+                  <div class="lzcx-member-name">
+                    ${escapeHtml(m.username)}
+                    ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
+                    ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
+                  </div>
+                  ${isHost && m.role !== "host" && room.status !== "ended" ? `
+                    <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
+                      <option value="">未分配</option>
+                      ${(state.characters_meta || []).map((c) => `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+                    </select>
+                  ` : ""}
+                </div>
+              `).join("")}
+            </div>
+          </div>
+          ${state.cleared ? `<div class="side-card" id="lzcxClearBox"><p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p></div>` : ""}
+          ${room.ai_enabled ? `
+          <div class="side-card" id="lzcxKeyBox">
+            <h4>AI Key（房间共用）</h4>
+            ${room.has_host_key
+              ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
+              : `<p class="ai-hint" style="margin:0 0 8px"><span class="warn">⚠ 本房间尚未绑定 AI Key</span></p>`}
+            ${isHost && room.status !== "ended" ? `
+              <button class="btn btn-secondary" style="width:100%;margin-bottom:6px" onclick="bindLzcxHostKey('${escapeJs(room.code)}')">${room.has_host_key ? "更新 AI Key" : "绑定 AI Key"}</button>
+              ${room.has_host_key ? `<button class="btn btn-ghost" style="width:100%" onclick="unbindLzcxHostKey('${escapeJs(room.code)}')">解绑</button>` : ""}
+            ` : ""}
+          </div>` : ""}
+          ${isHost ? `
+          <div class="side-card host-panel">
+            <h4>🎙 房主控制面板</h4>
+            ${!room.ai_enabled && soup?.base ? `
+              <div class="host-base" style="margin-bottom:12px">
+                <div class="host-base-label">汤底（仅你可见）</div>
+                <div class="host-base-text">${escapeHtml(soup.base || "")}</div>
+                ${soup.host_manual ? `<div class="host-base-label" style="margin-top:8px">主持人手册</div><div class="host-base-text">${escapeHtml(soup.host_manual)}</div>` : ""}
+              </div>
+            ` : ""}
+            <div class="lzcx-host-btns">
+              <button id="lzcxReleaseBtn" class="btn btn-secondary" onclick="releaseLzcxFragment('${escapeJs(room.code)}')" ${(state.released_fragments || 0) >= (state.total_fragments || 0) ? "disabled" : ""}>释放碎片</button>
+              <button class="btn btn-secondary" onclick="triggerLzcxRule('${escapeJs(room.code)}')">触发规则</button>
+              <button class="btn btn-secondary" onclick="completeLzcxTask('${escapeJs(room.code)}')">完成任务</button>
+              <button class="btn btn-secondary" onclick="setLzcxSanity('${escapeJs(room.code)}')">调整理智</button>
+              <button class="btn btn-ghost" onclick="resetLzcxState('${escapeJs(room.code)}')">重置状态</button>
+            </div>
+          </div>
+          ` : ""}
+          ${isHost ? `
+          <div class="side-card">
+            <h4>房间管理</h4>
+            <p class="ai-hint" style="margin:0 0 10px">房主可解散当前房间。</p>
+            <button class="btn btn-danger" style="width:100%" onclick="dissolveLzcxRoom('${escapeJs(room.code)}')">解散房间（永久删除）</button>
+          </div>
+          ` : ""}
+        </div>
+      </div>
+      <div id="modalRoot"></div>
+    </div>
+  `;
+
+  const body = $("#chatBody");
+  body.innerHTML = messages.map(renderMsg).join("");
+  body.scrollTop = body.scrollHeight;
+
+  if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
+  store.pollInFlight = false;
+  store.pollLastId = messages.length ? messages[messages.length - 1].id : 0;
+  connectLzcxRoom(code);
+}
+
+function connectLzcxRoom(code) {
+  toast("已加入房间 " + code, "ok");
+  if (store.pollTimer) clearInterval(store.pollTimer);
+  store.pollTimer = setInterval(() => pollLzcxMessages(code), 1500);
+}
+
+async function pollLzcxMessages(code) {
+  if (location.hash !== "#/lzcxroom/" + code) {
+    if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
+    return;
+  }
+  if (store.pollInFlight) return;
+  store.pollInFlight = true;
+  const since = store.pollLastId || 0;
+  const { ok, data } = await API.json(`/api/lzcxroom/${code}/messages?since=${since}`);
+  store.pollInFlight = false;
+  if (!ok || !data.messages) return;
+  const body = $("#chatBody");
+  if (!body) return;
+  if (!data.messages.length) return;
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+  data.messages.forEach((m) => {
+    const key = msgKey(m);
+    if (body.querySelector(`[data-key="${key}"]`)) {
+      if (m.id && m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
+      return;
+    }
+    body.insertAdjacentHTML("beforeend", renderMsg(m));
+    if (m.id && m.id > (store.pollLastId || 0)) store.pollLastId = m.id;
+  });
+  if (nearBottom) body.scrollTop = body.scrollHeight;
+}
+
+window.sendLzcxChat = async () => {
+  const input = $("#chatInput");
+  if (!input) return;
+  const content = input.value.trim();
+  if (!content) return;
+  const code = store.currentRoomCode;
+  if (!code) { toast("未在房间内", "err"); return; }
+  input.value = "";
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/messages`, { content });
+  if (!ok) toast(data.error || "发送失败", "err");
+};
+
+window.sendLzcxAsk = async () => {
+  const input = $("#chatInput");
+  if (!input) return;
+  const content = input.value.trim();
+  if (!content) return;
+  const code = store.currentRoomCode;
+  if (!code) { toast("未在房间内", "err"); return; }
+  input.value = "";
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/ask`, { content });
+  if (!ok) {
+    if (data.code === "missing_key") toast("本房间未绑定 AI Key，请房主在房间侧栏绑定", "err");
+    else toast(data.error || "提问失败", "err");
+    return;
+  }
+  if (data.error) toast(data.error, "err");
+  if (data.state) refreshLzcxStateUI(code, data.state);
+};
+
+async function refreshLzcxRoomState(code) {
+  const { ok, data } = await API.json(`/api/lzcxroom/${code}`);
+  if (!ok || !data.room) return;
+  refreshLzcxStateUI(code, data.room.state || {}, data.room);
+}
+
+function refreshLzcxStateUI(code, state, room) {
+  const members = room?.members || [];
+  const isHost = room?.host?.id === store.user?.id;
+
+  const codeEl = $("#lzcxCodeLine");
+  if (codeEl && room) {
+    codeEl.textContent = `${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${members.length}/${room.member_limit}` : ""}${state.cleared ? " · 已通关" : ""}`;
+  }
+
+  const sanityEl = $("#lzcxSanityVal");
+  if (sanityEl) sanityEl.textContent = `${state.sanity ?? "-"}/${state.initial_sanity ?? "-"}`;
+  const fragmentEl = $("#lzcxFragmentVal");
+  if (fragmentEl) fragmentEl.textContent = `${state.released_fragments ?? 0}/${state.total_fragments ?? 0}`;
+  const nodeEl = $("#lzcxNodeVal");
+  if (nodeEl) {
+    const keyNodes = state.key_nodes || [];
+    const hitCount = keyNodes.filter((n) => n.hit).length;
+    nodeEl.textContent = keyNodes.length ? `${hitCount}/${keyNodes.length}` : "待AI拆分";
+  }
+  const rulesBox = $("#lzcxRulesBox");
+  if (rulesBox) {
+    rulesBox.innerHTML = (state.triggered_rules?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已触发规则</span>${state.triggered_rules.map((r) => `<span class="lzcx-tag">${escapeHtml(r)}</span>`).join("")}</div>` : "");
+  }
+  const tasksBox = $("#lzcxTasksBox");
+  if (tasksBox) {
+    tasksBox.innerHTML = (state.completed_tasks?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已完成任务</span>${state.completed_tasks.map((t) => `<span class="lzcx-tag">任务${escapeHtml(String(t))}</span>`).join("")}</div>` : "");
+  }
+
+  const membersBox = $("#lzcxMembersBox");
+  if (membersBox && room) {
+    membersBox.innerHTML = members.map((m) => `
+      <div class="lzcx-member">
+        <div class="lzcx-member-name">
+          ${escapeHtml(m.username)}
+          ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
+          ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
+        </div>
+        ${isHost && m.role !== "host" && room.status !== "ended" ? `
+          <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
+            <option value="">未分配</option>
+            ${(state.characters_meta || []).map((c) => `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+          </select>
+        ` : ""}
+      </div>
+    `).join("");
+  }
+
+  const oldClear = $("#lzcxClearBox");
+  if (state.cleared) {
+    const html = `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>`;
+    if (oldClear) oldClear.innerHTML = html;
+    else {
+      const keyBox = $("#lzcxKeyBox");
+      const wrap = document.createElement("div");
+      wrap.className = "side-card";
+      wrap.id = "lzcxClearBox";
+      wrap.innerHTML = html;
+      if (keyBox) keyBox.parentNode.insertBefore(wrap, keyBox);
+    }
+  } else if (oldClear) {
+    oldClear.remove();
+  }
+
+  const releaseBtn = $("#lzcxReleaseBtn");
+  if (releaseBtn) {
+    releaseBtn.disabled = (state.released_fragments || 0) >= (state.total_fragments || 0);
+  }
+
+  if (room) {
+    const keyBox = $("#lzcxKeyBox");
+    if (keyBox && room.ai_enabled) {
+      keyBox.innerHTML = `
+        <h4>AI Key（房间共用）</h4>
+        ${room.has_host_key
+          ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
+          : `<p class="ai-hint" style="margin:0 0 8px"><span class="warn">⚠ 本房间尚未绑定 AI Key</span></p>`}
+        ${isHost && room.status !== "ended" ? `
+          <button class="btn btn-secondary" style="width:100%;margin-bottom:6px" onclick="bindLzcxHostKey('${escapeJs(room.code)}')">${room.has_host_key ? "更新 AI Key" : "绑定 AI Key"}</button>
+          ${room.has_host_key ? `<button class="btn btn-ghost" style="width:100%" onclick="unbindLzcxHostKey('${escapeJs(room.code)}')">解绑</button>` : ""}
+        ` : ""}
+      `;
+    }
+  }
+}
+
+window.bindLzcxHostKey = async (code) => {
+  let key = KeyMgr.get();
+  let cfg = KeyMgr.getConfig();
+  if (!key) {
+    key = prompt("请输入 DeepSeek API Key（sk-...）：\n绑定后房间全员共用此 Key，无需各自配置。");
+    if (!key) return;
+    key = key.trim();
+    cfg = {};
+  }
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/ai-key`, {
+    api_key: key,
+    provider: cfg.provider || "deepseek",
+    base_url: cfg.baseUrl || "",
+    model: cfg.model || "",
+  });
+  if (!ok) { toast(data.error || "绑定失败", "err"); return; }
+  toast("AI Key 已绑定，房间全员可共用", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.unbindLzcxHostKey = async (code) => {
+  if (!confirm("确认解绑房间 AI Key？\n解绑后房间内任何人都无法向 AI 提问。")) return;
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/ai-key`, { api_key: "" });
+  if (!ok) { toast(data.error || "解绑失败", "err"); return; }
+  toast("已解绑", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.assignLzcxCharacter = async (userId, character) => {
+  const code = store.currentRoomCode;
+  if (!code) return;
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/assign-character`, { user_id: userId, character });
+  if (!ok) { toast(data.error || "分配失败", "err"); return; }
+  toast(character ? `已分配角色：${character}` : "已取消角色", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.releaseLzcxFragment = async (code) => {
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/release-fragment`, {});
+  if (!ok) { toast(data.error || "释放失败", "err"); return; }
+  toast(data.msg || "已释放", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.triggerLzcxRule = async (code) => {
+  const rule = prompt("请输入要触发的规则名（如：规则六）：");
+  if (!rule) return;
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/trigger`, { rule: rule.trim() });
+  if (!ok) { toast(data.error || "触发失败", "err"); return; }
+  toast(data.msg || "已触发", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.completeLzcxTask = async (code) => {
+  const task = prompt("请输入要标记完成的任务编号（1/2/3...，最终任务填 999）：");
+  if (!task) return;
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/complete-task`, { task: parseInt(task) || 0 });
+  if (!ok) { toast(data.error || "标记失败", "err"); return; }
+  toast(data.msg || "已标记", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.setLzcxSanity = async (code) => {
+  const sanity = prompt("请输入新的理智值（≥0）：");
+  if (sanity === null) return;
+  const { ok, data } = await API.put(`/api/lzcxroom/${code}/sanity`, { sanity: parseInt(sanity) || 0 });
+  if (!ok) { toast(data.error || "调整失败", "err"); return; }
+  toast(data.msg || "已调整", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.resetLzcxState = async (code) => {
+  if (!confirm("确认重置房间状态机？\n将清空碎片释放、规则触发、任务完成、理智等进度，不可撤销。")) return;
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/reset-state`, {});
+  if (!ok) { toast(data.error || "重置失败", "err"); return; }
+  toast("状态已重置", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.dissolveLzcxRoom = async (code) => {
+  if (!confirm("⚠️ 确认解散房间？\n\n房间及所有消息将被永久删除，不可恢复！")) return;
+  if (!confirm("再次确认：此操作无法撤销，确定要解散吗？")) return;
+  const { ok, data } = await API.del(`/api/lzcxroom/${code}`);
+  if (!ok) { toast(data.error || "解散失败", "err"); return; }
+  toast("房间已解散", "ok");
+  location.hash = "#/rooms";
+};
+
+// ---- admin 开灵之残响测试房 ----
+window.openLzcxTestRoomModal = () => {
+  if (!store.soups.length) { toast("汤数据未加载", "err"); return; }
+  const lzcxSoups = store.soups.filter((s) => s.season === "灵之残响" && s.status === "approved");
+  if (!lzcxSoups.length) { toast("没有可用的灵之残响汤", "err"); return; }
+  const root = $("#modalRoot");
+  root.innerHTML = `
+    <div class="overlay open" onclick="closeModal(event)"></div>
+    <div class="modal open">
+      <div class="modal-header"><div><h2 class="modal-title">开灵之残响测试房</h2></div><button class="modal-close" onclick="closeModal(event)">✕</button></div>
+      <div class="modal-body">
+        <div class="field">
+          <label>选择一碗汤 <span class="field-hint">仅灵之残响系列</span></label>
+          <select class="input" id="lzcxTestSoup">
+            ${lzcxSoups.map((s) => `<option value="${s.id}">${escapeHtml(s.title)}${s.episode ? " · " + escapeHtml(s.episode) : ""}</option>`).join("")}
+          </select>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--text-2);margin:12px 0 6px">
+          <input type="checkbox" id="lzcxTestAi" checked /> 启用 AI 主持人
+        </label>
+        <div class="field">
+          <label>AI 提问次数上限（0 = 无限）</label>
+          <input class="input" id="lzcxTestAiLimit" type="number" min="0" max="999" value="0" />
+        </div>
+        <div class="field">
+          <label>房间人数上限（0 = 无限）</label>
+          <input class="input" id="lzcxTestMemberLimit" type="number" min="0" max="99" value="0" />
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:10px" onclick="createLzcxTestRoom()">创建测试房</button>
+      </div>
+    </div>
+  `;
+  document.body.style.overflow = "hidden";
+};
+
+window.createLzcxTestRoom = async () => {
+  const soupId = parseInt($("#lzcxTestSoup")?.value) || 0;
+  const ai_enabled = $("#lzcxTestAi")?.checked ?? true;
+  if (!soupId) { toast("请先选择汤", "err"); return; }
+  const { ok, data } = await API.post("/api/lzcxroom", {
+    soup_id: soupId,
+    ai_enabled,
+    ai_question_limit: parseInt($("#lzcxTestAiLimit")?.value) || 0,
+    member_limit: parseInt($("#lzcxTestMemberLimit")?.value) || 0,
+  });
+  if (!ok) { toast(data.error || "创建失败", "err"); return; }
+  if (ai_enabled && KeyMgr.has()) {
+    await API.post(`/api/lzcxroom/${data.code}/ai-key`, {
+      api_key: KeyMgr.get(),
+      ...KeyMgr.getProviderPayload(),
+    });
+  }
+  closeModal();
+  location.hash = "#/lzcxroom/" + data.code;
+};
 
 // ---------- 初始化 ----------
 async function boot() {
