@@ -62,6 +62,8 @@ function renderMd(md) {
     // 这里把单行内、不含 * 的 **content** 提前转成 <strong>，marked 见到 HTML 标签会原样保留。
     // 不处理跨行 **（content 含换行），交给 marked 正常解析。
     src = src.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    // Markdown 中图片路径 ./海龟汤图片/ 对应 web 路径 /soups-img/
+    src = src.replace(/\.\/海龟汤图片\//g, "/soups-img/");
     html = marked.parse(src);
     if (typeof DOMPurify !== "undefined") {
       html = DOMPurify.sanitize(html, {
@@ -72,7 +74,7 @@ function renderMd(md) {
           "hr", "div", "dl", "dt", "dd",
         ],
         ALLOWED_ATTR: [
-          "style", "alt", "class", "href", "target", "colspan", "rowspan",
+          "style", "alt", "src", "class", "href", "target", "colspan", "rowspan",
           "align", "valign",
         ],
         ALLOW_DATA_ATTR: false,
