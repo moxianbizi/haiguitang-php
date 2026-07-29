@@ -3277,7 +3277,8 @@ window.dissolveLzcxRoom = async (code) => {
 };
 
 // ---- admin 开灵之残响测试房 ----
-window.openLzcxTestRoomModal = () => {
+window.openLzcxTestRoomModal = async () => {
+  if (!store.soups.length) await loadSoups();
   if (!store.soups.length) { toast("汤数据未加载", "err"); return; }
   const lzcxSoups = store.soups.filter((s) => s.season === "灵之残响" && s.status === "approved");
   if (!lzcxSoups.length) { toast("没有可用的灵之残响汤", "err"); return; }
