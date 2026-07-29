@@ -1390,7 +1390,8 @@ async function renderRoom(code) {
               </div>
             </div>
           </div>` : ""}
-          <div class="side-card" id="clearStateBox">${room.state?.cleared ? `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>` : ""}</div>
+          ${room.state?.cleared ? `
+          <div class="side-card" id="clearStateBox"><p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p></div>` : ""}
           ${room.ai_enabled ? `
           <div class="side-card" id="aiKeyBox">
             <h4>AI Key（房间共用）</h4>
@@ -1524,12 +1525,23 @@ async function refreshRoomState(code) {
   if (codeEl) {
     codeEl.textContent = `${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${room.member_count}/${room.member_limit}` : ""}${state.cleared ? " · 已通关" : ""}`;
   }
-  // 通关提示卡片（节点列表对所有人隐藏，仅通关时显示祝贺）
-  const clearBox = $("#clearStateBox");
-  if (clearBox) {
-    clearBox.innerHTML = state.cleared
-      ? `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>`
-      : "";
+  // 通关提示卡片：未通关时移除，通关时创建（节点列表对所有人隐藏）
+  const oldClear = $("#clearStateBox");
+  if (state.cleared) {
+    const html = `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>`;
+    if (oldClear) {
+      oldClear.innerHTML = html;
+    } else {
+      // 不存在则在 aiKeyBox 前插入
+      const keyBox2 = $("#aiKeyBox");
+      const wrap = document.createElement("div");
+      wrap.className = "side-card";
+      wrap.id = "clearStateBox";
+      wrap.innerHTML = html;
+      if (keyBox2) keyBox2.parentNode.insertBefore(wrap, keyBox2);
+    }
+  } else if (oldClear) {
+    oldClear.remove();
   }
   // 更新 AI Key 卡片
   const keyBox = $("#aiKeyBox");
