@@ -1375,7 +1375,7 @@ async function renderRoom(code) {
               ${room.ai_enabled
                 ? "看汤面 → 向 AI 提是非题 → AI 只答「是/否/无关」→ 猜出汤底。"
                 : "真人主持模式：向房主提问，房主回答「是/否/无关」。房主能看到汤底。"}
-              ${room.host?.id === store.user?.id ? " 你是房主" + (room.ai_enabled ? "，可换汤、查看汤底。" : "（主持人），可换汤、回答问题、标记节点。") : ""}
+              ${room.host?.id === store.user?.id ? " 你是房主" + (room.ai_enabled ? "，可换汤、管理房间。" : "（主持人），可换汤、回答问题。") : ""}
             </p>
           </div>
           ${room.host?.id === store.user?.id && !room.ai_enabled && soup?.base ? `

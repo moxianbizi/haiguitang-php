@@ -151,9 +151,10 @@ function rooms_get(string $code, int $status = 200) {
 
     $soup = null;
     if ($r['soup_id']) {
-        // 真人主持模式：房主能看到汤底（base/host_manual/extra），玩家只看汤面
+        // 仅真人主持（非 AI）模式下房主能看到汤底；AI 模式房主与玩家一样只看汤面
         $isHost = $user && (int)$r['host_id'] === (int)$user['id'];
-        if ($isHost) {
+        $canViewBase = $isHost && empty($r['ai_enabled']);
+        if ($canViewBase) {
             $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface, base, host_manual, extra FROM soups WHERE id = ?');
         } else {
             $stmt = $pdo->prepare('SELECT id, filename, season, episode, title, surface FROM soups WHERE id = ?');
