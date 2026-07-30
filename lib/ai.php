@@ -435,6 +435,17 @@ function ask_ai_lzcx(
     $sysExtra .= "- 仅当规则已在「已触发」列表中时，你才可以引用该规则揭示的真相。\n";
     $sysExtra .= "- 未触发的规则必须保密，即便玩家已推理出对应条件，也只能用是/否/无关回答。\n\n";
 
+    $hiddenRules = $state['hidden_rules_meta'] ?? [];
+    if (!is_array($hiddenRules)) $hiddenRules = [];
+    if (!empty($hiddenRules)) {
+        $sysExtra .= "【隐藏规则触发器 · 由你负责判定】\n";
+        foreach ($hiddenRules as $hr) {
+            $sysExtra .= "- {$hr['name']}：触发条件：{$hr['condition']}\n";
+        }
+        $sysExtra .= "- 监听玩家每次提问或陈述，一旦满足某条隐藏规则的触发条件，必须在本回答最末尾追加标记 `<<<TRIGGER:规则名>>>`（规则名与上方列表完全一致）。\n";
+        $sysExtra .= "- 该标记后端会自动剥离，玩家不可见；触发后规则进入「已触发」列表，你才可引用其内容。\n\n";
+    }
+
     $tasks = $state['completed_tasks'] ?? [];
     if (!is_array($tasks)) $tasks = [];
     $sysExtra .= "【已完成的任务】" . (empty($tasks) ? '（暂无）' : '任务 ' . implode(',', $tasks)) . "\n";

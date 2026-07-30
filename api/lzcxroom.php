@@ -1094,9 +1094,10 @@ function lzcx_ask(string $code) {
         ]);
     }
 
-    // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点状态 =====
+    // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点/隐藏规则状态 =====
     $justCleared = false;
     $newHits = [];
+    $newTriggers = [];
     if ($keyNodes !== null) {
         // 1) 处理 NODES 标记（AI 自拆节点，仅在 key_nodes 为空时接收）
         if (empty($state['key_nodes']) && preg_match('/<<<NODES:([^>]+?)>>>/u', $answer, $nm)) {
@@ -1123,9 +1124,23 @@ function lzcx_ask(string $code) {
             // 兜底：剥离可能残留的其它 HIT 标记
             $answer = preg_replace('/<<<HIT:[^>]*?>>>/u', '', $answer);
         }
+
+        // 3) 处理 TRIGGER 标记（AI 自动触发隐藏规则）
+        if (preg_match_all('/<<<TRIGGER:([^>]+?)>>>/u', $answer, $tm)) {
+            foreach ($tm[1] as $ruleName) {
+                $ruleName = trim($ruleName);
+                if ($ruleName === '') continue;
+                $triggeredList = $state['triggered_rules'] ?? [];
+                if (!in_array($ruleName, $triggeredList, true)) {
+                    $state['triggered_rules'][] = $ruleName;
+                    $newTriggers[] = $ruleName;
+                }
+            }
+            $answer = preg_replace('/<<<TRIGGER:[^>]*?>>>/u', '', $answer);
+        }
         $answer = trim($answer);
 
-        // 3) 通关判定：命中节点数 / 总节点数 ≥ 85%
+        // 4) 通关判定：命中节点数 / 总节点数 ≥ 85%
         $nodes = $state['key_nodes'] ?? [];
         if (!empty($nodes) && empty($state['cleared'])) {
             $total = count($nodes);
@@ -1158,6 +1173,10 @@ function lzcx_ask(string $code) {
     if (!empty($newHits)) {
         save_message($r['id'], null, 'system', '🎯 命中关键节点：' . implode('、', $newHits));
     }
+    // 隐藏规则触发系统提示
+    if (!empty($newTriggers)) {
+        save_message($r['id'], null, 'system', '📜 AI 触发隐藏规则：' . implode('、', $newTriggers));
+    }
     // 通关系统提示
     if ($justCleared) {
         $nodes = $state['key_nodes'] ?? [];
@@ -1179,6 +1198,7 @@ function lzcx_trigger(string $code) {
     $user = require_login();
     $r = lzcx_require_room($code);
     if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以触发规则', 403);
+    if (!empty($r['ai_enabled'])) json_error('AI 主持模式下，隐藏规则由 AI 根据玩家提问自动触发，房主无需手动触发', 403);
 
     $data = body_json();
     $ruleName = trim($data['rule'] ?? '');
@@ -1298,6 +1318,7 @@ function lzcx_host_command(string $code) {
         case '规则':
         case 'rule':
         case '触发规则':
+            if (!empty($r['ai_enabled'])) json_error('AI 主持模式下，隐藏规则由 AI 根据玩家提问自动触发，房主无需手动触发', 403);
             if ($arg === '') json_error('请填写规则名，例如 /规则 规则一');
             if (in_array($arg, $state['triggered_rules'] ?? [], true)) json_error('该规则已触发');
             $state['triggered_rules'][] = $arg;
