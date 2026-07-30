@@ -426,7 +426,8 @@ function ask_ai_lzcx(
     $total    = (int)($state['total_fragments'] ?? 0);
     $sysExtra .= "【碎片释放进度】已释放 {$released}/{$total} 片残响碎片。\n";
     $sysExtra .= "- 仅已释放的碎片内容可以引用/暗示，未释放的碎片严禁提前剧透。\n";
-    $sysExtra .= "- 碎片按固定顺序释放，房主会手动推进，你不要主动给碎片。\n\n";
+    $sysExtra .= "- 碎片只能由「重现署·灵者」的角色能力获得：柳千渊发动【现！】消耗4理智获得一片；孙沐阳发动【以心为眼】每累计减少15理智获得一片，并可指定碎片类型。\n";
+    $sysExtra .= "- 房主不会手动释放碎片，你也不要主动给碎片。\n\n";
 
     $triggered = $state['triggered_rules'] ?? [];
     if (!is_array($triggered)) $triggered = [];

@@ -7,7 +7,7 @@
  *   2. rooms.state 存状态机（碎片/触发/任务/理智/提问计数）
  *   3. room_members 表存角色分配，AI 按角色视角回答
  *   4. AI 调用走 ask_ai_lzcx()，支持多轮上下文 + 状态注入
- *   5. 房主有手动控制接口：释放碎片/触发规则/完成任务/调理智
+ *   5. 房主有手动控制接口：触发规则/完成任务/调理智（碎片只能由灵者角色能力获得）
  *
  * 路由前缀：/api/lzcxroom/*
  */
@@ -62,13 +62,14 @@ function handle_lzcxroom(array $segments) {
     // 房主绑定/更新 AI Key（房间全员共用）
     elseif ($sub === 'ai-key' && $method === 'POST') lzcx_set_ai_key($code);
     // 房主状态机控制（按钮面板，保留兼容）
-    elseif ($sub === 'release-fragment' && $method === 'POST') lzcx_release_fragment($code);
     elseif ($sub === 'trigger' && $method === 'POST') lzcx_trigger($code);
     elseif ($sub === 'complete-task' && $method === 'POST') lzcx_complete_task($code);
     elseif ($sub === 'sanity' && $method === 'PUT') lzcx_set_sanity($code);
     elseif ($sub === 'reset-state' && $method === 'POST') lzcx_reset_state($code);
     // 房主主持人指令（纯对话模式，推荐）
     elseif ($sub === 'host-command' && $method === 'POST') lzcx_host_command($code);
+    // 房主开始游戏
+    elseif ($sub === 'start' && $method === 'POST') lzcx_start_game($code);
     else json_error('Not Found', 404);
 }
 
@@ -136,6 +137,11 @@ function lzcx_parse_meta(string $surface, string $hostManual, string $extra): ar
         $meta['fragment_images'] = array_values(array_unique($im[1]));
     }
 
+    // 碎片类型：按顺序提取 extra 中"暗喻碎片/线索碎片/指引碎片/剧情碎片/隐藏碎片"
+    if (preg_match_all('/(暗喻|线索|指引|剧情|隐藏)碎片/u', $extra, $tm)) {
+        $meta['fragment_types'] = $tm[1];
+    }
+
     // 任务：「任务1：XXX」「任务 1：XXX」「最终任务：XXX」
     if (preg_match_all('/(?:最终任务|任务\s*(\d))[：:]\s*([^\n]+)/u', $blob, $tm, PREG_SET_ORDER)) {
         foreach ($tm as $t) {
@@ -183,6 +189,7 @@ function lzcx_init_state(array $meta): array {
         'tasks_meta'         => $meta['tasks'] ?? [],
         'hidden_rules_meta'  => $meta['hidden_rules'] ?? [],
         'fragment_images'    => $meta['fragment_images'] ?? [],
+        'fragment_types'     => $meta['fragment_types'] ?? [],
         // 关键节点：空数组=已启用机制但待 AI 自拆；非空=作者预定义
         'key_nodes'          => $keyNodes,
         'cleared'            => false, // 是否已通关（命中≥85%）
@@ -191,6 +198,9 @@ function lzcx_init_state(array $meta): array {
         'possessed_character'=> null,
         // 孙沐阳被动累计
         'sun_muyang_last_lost' => 0,
+        'sun_fragment_type'  => null, // 孙沐阳指定的下次被动碎片类型
+        // 柳千渊现！上次发动者（不可连续发动）
+        'last_xian_user_id'  => null,
     ];
 }
 
@@ -211,11 +221,15 @@ function lzcx_load_state(array $room): array {
         'characters_meta'    => [],
         'characters_info'    => [],
         'fragment_images'    => [],
+        'fragment_types'     => [],
         'key_nodes'          => [],
         'cleared'            => false,
+        'game_started'       => false,
         'possessed_user_id'  => null,
         'possessed_character'=> null,
         'sun_muyang_last_lost' => 0,
+        'sun_fragment_type'  => null,
+        'last_xian_user_id'  => null,
     ];
     // 角色池是全局固定的，每次加载都刷新，避免旧房间保留过期角色
     $s['characters_meta'] = array_column(LZCX_CHARACTERS, 'name');
@@ -276,12 +290,13 @@ function lzcx_create() {
 
     $ai_enabled = $data['ai_enabled'] ?? true;
     $ai_question_limit = max(0, (int)($data['ai_question_limit'] ?? 0));
-    $member_limit = max(0, (int)($data['member_limit'] ?? 0));
-    if ($member_limit > 0 && $member_limit < 2) $member_limit = 2;
+    // 灵之残响固定 4 人：1 主持人 + 3 玩家
+    $member_limit = 4;
 
     // 解析汤的灵之残响参数，初始化状态机
     $meta = lzcx_parse_meta($soup['surface'] ?? '', $soup['host_manual'] ?? '', $soup['extra'] ?? '');
     $state = lzcx_init_state($meta);
+    $state['game_started'] = false;
 
     $pdo = DB::pdo();
     $code = gen_room_code();
@@ -302,7 +317,7 @@ function lzcx_create() {
 
     // 系统消息
     $stmt = $pdo->prepare('INSERT INTO messages (room_id, msg_type, content) VALUES (?, ?, ?)');
-    $stmt->execute([$id, 'system', '灵之残响房间已创建，房主可在控制面板释放碎片/触发规则/分配角色']);
+    $stmt->execute([$id, 'system', '灵之残响房间已创建，满 4 人后房主可开始游戏。']);
 
     lzcx_get($code, 201);
 }
@@ -398,20 +413,23 @@ function lzcx_join(string $code) {
     $r = lzcx_require_room($code);
     if ($r['status'] !== 'playing') json_error('房间已结束');
 
-    // 人数上限（房主不占名额）
-    if ((int)$r['member_limit'] > 0) {
-        $pdo = DB::pdo();
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM room_members WHERE room_id = ? AND role != 'host'");
-        $stmt->execute([$r['id']]);
-        $cnt = (int)$stmt->fetchColumn();
-        if ($cnt >= (int)$r['member_limit']) json_error('房间人数已达上限', 403);
-    }
-
     $pdo = DB::pdo();
-    // 已在则不重复加
+    // 已在则不重复加（游戏开始后也允许已在房间的成员重新进入/刷新）
     $stmt = $pdo->prepare('SELECT 1 FROM room_members WHERE room_id = ? AND user_id = ?');
     $stmt->execute([$r['id'], $user['id']]);
     if ($stmt->fetch()) json_ok(['msg' => '已加入']);
+
+    // 游戏已开始则禁止新玩家加入
+    $state = lzcx_load_state($r);
+    if (!empty($state['game_started'])) json_error('游戏已开始，无法加入', 403);
+
+    // 人数上限：灵之残响固定 4 人（1 房主 + 3 玩家）
+    if ((int)$r['member_limit'] > 0) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM room_members WHERE room_id = ? AND role != 'host'");
+        $stmt->execute([$r['id']]);
+        $cnt = (int)$stmt->fetchColumn();
+        if ($cnt >= (int)$r['member_limit'] - 1) json_error('房间人数已达上限（灵之残响固定 4 人）', 403);
+    }
 
     $stmt = $pdo->prepare("INSERT INTO room_members (room_id, user_id, role) VALUES (?, ?, 'player')");
     $stmt->execute([$r['id'], $user['id']]);
@@ -431,6 +449,13 @@ function lzcx_assign_character(string $code) {
     if ($targetUserId <= 0) json_error('缺少 user_id');
     // character 为空表示取消角色
     if (mb_strlen($character) > 50) json_error('角色名过长');
+
+    $state = lzcx_load_state($r);
+    if (!empty($state['game_started'])) json_error('游戏已经开始，无法分配角色', 403);
+
+    if ($character !== '') {
+        lzcx_check_character_conflict((int)$r['id'], $character, $targetUserId);
+    }
 
     $pdo = DB::pdo();
     $stmt = $pdo->prepare('SELECT 1 FROM room_members WHERE room_id = ? AND user_id = ?');
@@ -506,6 +531,7 @@ function lzcx_send_message(string $code) {
     }
 
     $state = lzcx_load_state($r);
+    if (empty($state['game_started'])) json_error('游戏尚未开始，请等待房主开始游戏', 403);
     // 幻灵状态下禁止主动发言（只能被他人 @ 提问）
     if (!empty($state['possessed_user_id']) && (int)$state['possessed_user_id'] === (int)$user['id']) {
         json_error('你正处于幻灵状态，已被禁言，等待其他玩家向你提问');
@@ -548,6 +574,7 @@ function lzcx_skill(string $code) {
     if ($character === '') json_error('您还没有被分配角色，无法使用技能');
 
     $state = lzcx_load_state($r);
+    if (empty($state['game_started'])) json_error('游戏尚未开始，请等待房主开始游戏', 403);
 
     // 幻灵状态下禁止普通发言/技能（只能被提问）
     if (!empty($state['possessed_user_id']) && (int)$state['possessed_user_id'] === (int)$user['id']) {
@@ -569,8 +596,9 @@ function lzcx_skill(string $code) {
             if ($character !== '减') json_error('只有「减」可以发动【排除】');
             if ((int)$state['sanity'] < 2) json_error('理智不足，无法发动【排除】');
             if ($arg === '') json_error('请给出要排除的结论，例如 /排除 凶手是老板娘');
-            $state['sanity'] -= 2;
-            lzcx_save_state((int)$r['id'], $state);
+            $consume = lzcx_consume_sanity($r, $user, $state, 2);
+            $state = $consume['state'];
+            $sunMsg = $consume['sun_message'];
 
             $answer = lzcx_ai_judge($r, $user, $state, $character, 'exclude', $arg);
             $success = false;
@@ -579,7 +607,9 @@ function lzcx_skill(string $code) {
                 $answer = str_replace($m[0], '', $answer);
             }
             $answer = trim($answer);
-            save_message($r['id'], $user, 'system', "减发动了【排除】，消耗2理智。结论「{$arg}」" . ($success ? '排除成功' : '排除失败') . "。");
+            $systemMsg = "减发动了【排除】，消耗2理智。结论「{$arg}」" . ($success ? '排除成功' : '排除失败') . "。";
+            if ($sunMsg) $systemMsg .= ' ' . $sunMsg;
+            save_message($r['id'], $user, 'system', $systemMsg);
             $a_msg = save_message($r['id'], null, 'ai_answer', $answer ?: "结论「{$arg}」" . ($success ? '排除成功' : '排除失败') . "。");
 
             json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'exclude']);
@@ -598,12 +628,16 @@ function lzcx_skill(string $code) {
             $answer = trim($answer);
 
             // 若回答为「不是」消耗4理智
+            $sunMsg = '';
             if ($result === '不是') {
-                $state['sanity'] = max(0, (int)$state['sanity'] - 4);
-                lzcx_save_state((int)$r['id'], $state);
+                $consume = lzcx_consume_sanity($r, $user, $state, 4);
+                $state = $consume['state'];
+                $sunMsg = $consume['sun_message'];
             }
 
-            save_message($r['id'], $user, 'system', "许复元发动了【破局】。主持人回答：{$result}" . ($result === '不是' ? '，许复元消耗4理智' : '') . "。");
+            $systemMsg = "许复元发动了【破局】。主持人回答：{$result}" . ($result === '不是' ? '，许复元消耗4理智' : '') . "。";
+            if ($sunMsg) $systemMsg .= ' ' . $sunMsg;
+            save_message($r['id'], $user, 'system', $systemMsg);
             $a_msg = save_message($r['id'], null, 'ai_answer', $answer ?: "主持人回答：{$result}。");
 
             json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'poju']);
@@ -613,8 +647,9 @@ function lzcx_skill(string $code) {
             if ($character !== '辛笙') json_error('只有「辛笙」可以发动【心声】');
             if ((int)$state['sanity'] < 2) json_error('理智不足，无法发动【心声】');
             if ($arg === '') json_error('请给出两个结论，用「；」分隔，例如 /心声 凶手是老板娘；死者是自杀');
-            $state['sanity'] -= 2;
-            lzcx_save_state((int)$r['id'], $state);
+            $consume = lzcx_consume_sanity($r, $user, $state, 2);
+            $state = $consume['state'];
+            $sunMsg = $consume['sun_message'];
 
             $answer = lzcx_ai_judge($r, $user, $state, $character, 'xinsheng', $arg);
             $count = null;
@@ -624,7 +659,9 @@ function lzcx_skill(string $code) {
             }
             $answer = trim($answer);
 
-            save_message($r['id'], $user, 'system', "辛笙发动了【心声】，消耗2理智。两个结论中绝对正确的数量为：" . ($count !== null ? $count : '未知') . "。");
+            $systemMsg = "辛笙发动了【心声】，消耗2理智。两个结论中绝对正确的数量为：" . ($count !== null ? $count : '未知') . "。";
+            if ($sunMsg) $systemMsg .= ' ' . $sunMsg;
+            save_message($r['id'], $user, 'system', $systemMsg);
             $a_msg = save_message($r['id'], null, 'ai_answer', $answer ?: "绝对正确的结论数量：" . ($count !== null ? $count : '未知') . "。");
 
             json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'xinsheng']);
@@ -634,37 +671,38 @@ function lzcx_skill(string $code) {
         case 'xian':
             if ($character !== '柳千渊') json_error('只有「柳千渊」可以发动【现！】');
             if ((int)$state['sanity'] < 4) json_error('理智不足，无法发动【现！】');
-            $state['sanity'] -= 4;
-            $state['released_fragments'] = (int)($state['released_fragments'] ?? 0) + 1;
-
-            // 柳双鱼拷贝：若柳双鱼在场且还有剩余碎片，额外释放一张
-            $copyMessage = '';
-            $totalFragments = (int)($state['total_fragments'] ?? 0);
-            if (lzcx_has_character_in_room($r['id'], '柳双鱼')) {
-                if ($totalFragments === 0 || (int)$state['released_fragments'] < $totalFragments) {
-                    $state['released_fragments'] += 1;
-                    $copyMessage = '柳双鱼发动【拷贝】，额外复制了一张碎片。';
-                }
+            // 不可连续发动：同一玩家不能连续两次发动现！
+            if (!empty($state['last_xian_user_id']) && (int)$state['last_xian_user_id'] === (int)$user['id']) {
+                json_error('【现！】不可连续发动，请等待其他玩家行动后再试');
             }
 
-            lzcx_save_state((int)$r['id'], $state);
+            // 记录本次发动者，并统一消耗理智（孙沐阳自己降理智才会触发被动）
+            $state['last_xian_user_id'] = (int)$user['id'];
+            $consume = lzcx_consume_sanity($r, $user, $state, 4);
+            $state = $consume['state'];
+            $sunMsg = $consume['sun_message'];
 
-            // 孙沐阳被动：每减少15理智获得一块碎片
-            $sunExtra = lzcx_check_sun_muyang_reward($r, $user, $state);
-            if ($sunExtra) {
-                $state = $sunExtra['state'];
+            // 获得碎片（含柳双鱼拷贝）
+            $gain = lzcx_gain_fragment($r, $state);
+            $state = $gain['state'];
+            $gained = $gain['fragments'];
+            $copyMessage = count($gained) > 1 ? '柳双鱼发动【拷贝】，额外复制了一张碎片。' : '';
+
+            $fragAnswerParts = [];
+            foreach ($gained as $f) {
+                $typeLabel = $f['type'] ? "【{$f['type']}碎片】" : '碎片';
+                $fragAnswerParts[] = $f['url']
+                    ? "主持人展示了{$typeLabel}：\n\n![碎片]({$f['url']})"
+                    : "主持人展示了{$typeLabel}（暂无图片）";
             }
-
-            $fragIdx = max(0, (int)$state['released_fragments'] - 1);
-            $fragUrl = $state['fragment_images'][$fragIdx] ?? null;
-            $fragAnswer = $fragUrl ? "主持人展示了碎片：\n\n![碎片]({$fragUrl})" : '主持人展示了一片碎片（暂无图片）';
+            $fragAnswer = implode("\n\n", $fragAnswerParts);
 
             $systemMsg = "柳千渊发动了【现！】，消耗4理智，获得一片残响碎片。";
             if ($copyMessage) $systemMsg .= ' ' . $copyMessage;
-            if ($sunExtra) $systemMsg .= " {$sunExtra['message']}";
+            if ($sunMsg) $systemMsg .= ' ' . $sunMsg;
             save_message($r['id'], $user, 'system', $systemMsg);
 
-            $a_msg = save_message($r['id'], null, 'ai_answer', $fragAnswer);
+            $a_msg = save_message($r['id'], null, 'ai_answer', $fragAnswer ?: '主持人展示了一片残响碎片。');
 
             json_ok(['message' => message_to_dict($a_msg), 'state' => $state, 'skill' => 'xian']);
 
@@ -676,18 +714,36 @@ function lzcx_skill(string $code) {
             }
             if ((int)$state['sanity'] < 5) json_error('理智不足，无法发动【幻灵】');
             if ($arg === '') json_error('请指定幻灵角色，例如 /幻灵 老板娘');
+            if (!empty($state['possessed_user_id'])) json_error('当前已有幻灵状态，请等待其结束后再发动');
 
-            $state['sanity'] -= 5;
+            $consume = lzcx_consume_sanity($r, $user, $state, 5);
+            $state = $consume['state'];
+            $sunMsg = $consume['sun_message'];
             $state['possessed_user_id'] = (int)$user['id'];
             $state['possessed_character'] = $arg;
             lzcx_save_state((int)$r['id'], $state);
 
-            save_message($r['id'], $user, 'system', "{$user['username']}（{$character}）发动【幻灵】，化身为「{$arg}」，已被禁言。其他玩家可 @{$user['username']} 向其提问，主持人会以「{$arg}」的身份回答。");
+            $systemMsg = "{$user['username']}（{$character}）发动【幻灵】，化身为「{$arg}」，已被禁言。其他玩家可 @{$user['username']} 向其提问，主持人会以「{$arg}」的身份回答。";
+            if ($sunMsg) $systemMsg .= ' ' . $sunMsg;
+            save_message($r['id'], $user, 'system', $systemMsg);
 
             json_ok(['state' => $state, 'skill' => 'huanling']);
 
+        case '碎片类型':
+        case 'fragmenttype':
+        case 'fragment-type':
+            if ($character !== '孙沐阳') json_error('只有「孙沐阳」可以指定碎片类型');
+            $validTypes = ['暗喻', '线索', '指引', '剧情', '隐藏'];
+            if (!in_array($arg, $validTypes, true)) {
+                json_error('请指定有效碎片类型：暗喻、线索、指引、剧情、隐藏。例如 /碎片类型 暗喻');
+            }
+            $state['sun_fragment_type'] = $arg;
+            lzcx_save_state((int)$r['id'], $state);
+            save_message($r['id'], $user, 'system', "孙沐阳指定了下次【以心为眼】获得的碎片类型：{$arg}。");
+            json_ok(['state' => $state, 'skill' => 'fragmenttype']);
+
         default:
-            json_error('未知技能。当前支持：/排除、/破局、/心声、/现、/幻灵 角色名');
+            json_error('未知技能。当前支持：/排除、/破局、/心声、/现、/幻灵 角色名、/碎片类型 类型');
     }
 }
 
@@ -697,6 +753,76 @@ function lzcx_has_character_in_room(int $roomId, string $characterName): bool {
     $stmt = $pdo->prepare('SELECT 1 FROM room_members WHERE room_id = ? AND character_name = ?');
     $stmt->execute([$roomId, $characterName]);
     return (bool)$stmt->fetch();
+}
+
+/** 检查角色羁绊冲突（意马不与孙沐阳同场） */
+function lzcx_check_character_conflict(int $roomId, string $characterName, ?int $excludeUserId = null): void {
+    if ($characterName !== '意马' && $characterName !== '孙沐阳') return;
+    $conflict = $characterName === '意马' ? '孙沐阳' : '意马';
+    $pdo = DB::pdo();
+    $sql = 'SELECT 1 FROM room_members WHERE room_id = ? AND character_name = ?';
+    $params = [$roomId, $conflict];
+    if ($excludeUserId) {
+        $sql .= ' AND user_id != ?';
+        $params[] = $excludeUserId;
+    }
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    if ($stmt->fetch()) {
+        json_error("「{$characterName}」与「{$conflict}」存在羁绊，不能同场", 403);
+    }
+}
+
+/**
+ * 统一获得碎片（含柳双鱼拷贝）。
+ * $preferredType: 孙沐阳可指定碎片类型，优先获取该类型中第一张未释放的碎片。
+ * 返回 ['state'=>..., 'fragments'=>[['index'=>int,'type'=>string,'url'=>string|null], ...]]
+ */
+function lzcx_gain_fragment(array $r, array $state, ?string $preferredType = null): array {
+    $total = (int)($state['total_fragments'] ?? 0);
+    $released = (int)($state['released_fragments'] ?? 0);
+    $types = $state['fragment_types'] ?? [];
+    $images = $state['fragment_images'] ?? [];
+
+    if ($total > 0 && $released >= $total) {
+        return ['state' => $state, 'fragments' => []];
+    }
+
+    $idx = $released;
+    // 若指定了类型，找第一张未释放的该类型碎片
+    if ($preferredType) {
+        $max = $total > 0 ? $total : max(count($types), $released + 1, count($images));
+        for ($i = $released; $i < $max; $i++) {
+            if (($types[$i] ?? '') === $preferredType) {
+                $idx = $i;
+                break;
+            }
+        }
+    }
+
+    $gained = [];
+    $gained[] = [
+        'index' => $idx,
+        'type' => $types[$idx] ?? '',
+        'url' => $images[$idx] ?? null,
+    ];
+    $state['released_fragments'] = $idx + 1;
+
+    // 柳双鱼拷贝：若柳双鱼在场且还有剩余碎片，额外再释放一张
+    if (lzcx_has_character_in_room((int)$r['id'], '柳双鱼')) {
+        $newReleased = (int)$state['released_fragments'];
+        if ($total === 0 || $newReleased < $total) {
+            $gained[] = [
+                'index' => $newReleased,
+                'type' => $types[$newReleased] ?? '',
+                'url' => $images[$newReleased] ?? null,
+            ];
+            $state['released_fragments'] = $newReleased + 1;
+        }
+    }
+
+    lzcx_save_state((int)$r['id'], $state);
+    return ['state' => $state, 'fragments' => $gained];
 }
 
 /**
@@ -780,11 +906,31 @@ function lzcx_fallback_judge(string $skill, string $arg): string {
 }
 
 /**
- * 孙沐阳被动【以心为眼】：每减少15理智获得一块碎片。
+ * 统一消耗理智并触发孙沐阳被动【以心为眼】。
+ * 返回 ['state'=>..., 'sun_message'=>...]
+ */
+function lzcx_consume_sanity(array $r, array $user, array $state, int $cost): array {
+    if ($cost <= 0) return ['state' => $state, 'sun_message' => ''];
+    $state['sanity'] = max(0, (int)$state['sanity'] - $cost);
+    lzcx_save_state((int)$r['id'], $state);
+    $sunExtra = lzcx_check_sun_muyang_reward($r, $user, $state);
+    if ($sunExtra) {
+        return ['state' => $sunExtra['state'], 'sun_message' => $sunExtra['message']];
+    }
+    return ['state' => $state, 'sun_message' => ''];
+}
+
+/**
+ * 孙沐阳被动【以心为眼】：孙沐阳自己每减少15理智获得一块碎片，可指定碎片类型。
  * 返回 null 或 ['state'=>..., 'message'=>...]
  */
 function lzcx_check_sun_muyang_reward(array $r, array $user, array $state): ?array {
-    if (!lzcx_has_character_in_room((int)$r['id'], '孙沐阳')) return null;
+    // 只有孙沐阳自己消耗理智时才触发
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare('SELECT user_id FROM room_members WHERE room_id = ? AND character_name = ?');
+    $stmt->execute([(int)$r['id'], '孙沐阳']);
+    $sunUserId = $stmt->fetchColumn();
+    if (!$sunUserId || (int)$sunUserId !== (int)$user['id']) return null;
 
     $initial = (int)($state['initial_sanity'] ?? 0);
     $current = (int)($state['sanity'] ?? 0);
@@ -795,12 +941,21 @@ function lzcx_check_sun_muyang_reward(array $r, array $user, array $state): ?arr
 
     if ($count <= 0) return null;
 
+    $preferredType = $state['sun_fragment_type'] ?? null;
     $msgParts = [];
     for ($i = 0; $i < $count; $i++) {
-        $total = (int)($state['total_fragments'] ?? 0);
-        if ($total > 0 && (int)$state['released_fragments'] >= $total) break;
-        $state['released_fragments'] = (int)($state['released_fragments'] ?? 0) + 1;
-        $msgParts[] = "孙沐阳发动【以心为眼】，累计理智减少达到阈值，获得第 " . ($state['released_fragments']) . " 片碎片。";
+        $gain = lzcx_gain_fragment($r, $state, $preferredType);
+        if (empty($gain['fragments'])) break;
+        $state = $gain['state'];
+        $first = $gain['fragments'][0];
+        $typeLabel = $first['type'] ? "【{$first['type']}碎片】" : '碎片';
+        $msgParts[] = "孙沐阳发动【以心为眼】，累计理智减少达到阈值，获得第 " . ($first['index'] + 1) . " 片{$typeLabel}。";
+        if (count($gain['fragments']) > 1) {
+            $msgParts[] = '柳双鱼发动【拷贝】，额外复制了一张碎片。';
+        }
+        // 指定类型仅在本次触发中生效一次，用完即清空
+        $preferredType = null;
+        $state['sun_fragment_type'] = null;
     }
     $state['sun_muyang_last_lost'] = $lost;
     lzcx_save_state((int)$r['id'], $state);
@@ -864,6 +1019,7 @@ function lzcx_ask(string $code) {
 
     // 加载状态机
     $state = lzcx_load_state($r);
+    if (empty($state['game_started'])) json_error('游戏尚未开始，请等待房主开始游戏', 403);
 
     // 幻灵状态处理
     $possessedUsername = null;
@@ -988,6 +1144,16 @@ function lzcx_ask(string $code) {
 
     $a_msg = save_message($r['id'], null, 'ai_answer', $answer);
 
+    // 向幻灵提问后自动解除幻灵状态
+    $possessedCleared = false;
+    if ($possessedUsername && $possessedCharacter && str_contains($content, '@' . $possessedUsername)) {
+        $state['possessed_user_id'] = null;
+        $state['possessed_character'] = null;
+        lzcx_save_state((int)$r['id'], $state);
+        save_message($r['id'], null, 'system', "幻灵状态已解除，{$possessedUsername} 恢复正常发言。");
+        $possessedCleared = true;
+    }
+
     // 命中节点系统提示
     if (!empty($newHits)) {
         save_message($r['id'], null, 'system', '🎯 命中关键节点：' . implode('、', $newHits));
@@ -1008,25 +1174,6 @@ function lzcx_ask(string $code) {
 }
 
 // ===================== 房主状态机控制 =====================
-
-function lzcx_release_fragment(string $code) {
-    $user = require_login();
-    $r = lzcx_require_room($code);
-    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以释放碎片', 403);
-
-    $state = lzcx_load_state($r);
-    $total = (int)($state['total_fragments'] ?? 0);
-    $released = (int)($state['released_fragments'] ?? 0);
-    if ($total > 0 && $released >= $total) json_error('所有碎片已释放完毕');
-
-    $state['released_fragments'] = $released + 1;
-    lzcx_save_state((int)$r['id'], $state);
-
-    $msg = "房主释放了第 " . $state['released_fragments'] . " 片残响碎片（共 {$total}）";
-    save_message($r['id'], $user, 'system', $msg);
-
-    json_ok(['msg' => '已释放', 'state' => $state]);
-}
 
 function lzcx_trigger(string $code) {
     $user = require_login();
@@ -1111,13 +1258,14 @@ function lzcx_reset_state(string $code) {
 /**
  * 房主主持人指令（纯对话模式）
  * 指令格式：/动作 参数
- * 支持：/碎片、/规则 规则名、/任务 编号、/理智 数值、/重置
+ * 支持：/规则 规则名、/任务 编号、/理智 数值、/重置、/解除幻灵
  */
 function lzcx_host_command(string $code) {
     $user = require_login();
     $r = lzcx_require_room($code);
     if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以发送主持人指令', 403);
 
+    $pdo = DB::pdo();
     $data = body_json();
     $cmd = trim((string)($data['command'] ?? ''));
     if ($cmd === '' || !str_starts_with($cmd, '/')) {
@@ -1133,17 +1281,20 @@ function lzcx_host_command(string $code) {
     $state = lzcx_load_state($r);
     $msg = '';
 
-    switch ($action) {
-        case '碎片':
-        case 'fragment':
-        case '释放碎片':
-            $total = (int)($state['total_fragments'] ?? 0);
-            $released = (int)($state['released_fragments'] ?? 0);
-            if ($total > 0 && $released >= $total) json_error('所有碎片已释放完毕');
-            $state['released_fragments'] = $released + 1;
-            $msg = "主持人释放了第 {$state['released_fragments']} 片残响碎片" . ($total > 0 ? "（共 {$total}）" : '');
-            break;
+    // 游戏状态校验：
+    // - /分配 只能在游戏开始前使用
+    // - /重置 始终允许（重置状态机）
+    // - 其余推进类指令需游戏已开始
+    $isAssign = in_array($action, ['分配', 'assign', 'assign-character'], true);
+    $isReset = in_array($action, ['重置', 'reset', '重置状态'], true);
+    if ($isAssign && !empty($state['game_started'])) {
+        json_error('游戏已经开始，无法分配角色', 403);
+    }
+    if (!$isAssign && !$isReset && empty($state['game_started'])) {
+        json_error('游戏尚未开始，请等待房主开始游戏', 403);
+    }
 
+    switch ($action) {
         case '规则':
         case 'rule':
         case '触发规则':
@@ -1194,6 +1345,7 @@ function lzcx_host_command(string $code) {
             if ($targetUsername === '' || $targetCharacter === '') {
                 json_error('格式：/分配 @玩家 角色名');
             }
+            lzcx_check_character_conflict((int)$r['id'], $targetCharacter);
             $stmt = $pdo->prepare('SELECT u.id FROM users u JOIN room_members rm ON rm.user_id = u.id WHERE rm.room_id = ? AND u.username = ?');
             $stmt->execute([$r['id'], $targetUsername]);
             $targetUser = $stmt->fetch();
@@ -1208,14 +1360,50 @@ function lzcx_host_command(string $code) {
             $msg = "主持人分配 {$targetUsername} 扮演角色「{$targetCharacter}」";
             break;
 
+        case '解除幻灵':
+        case '解除':
+        case 'unpossess':
+            if (empty($state['possessed_user_id'])) json_error('当前没有幻灵状态');
+            $state['possessed_user_id'] = null;
+            $state['possessed_character'] = null;
+            $msg = '主持人解除了幻灵状态';
+            break;
+
         default:
-            json_error('未知指令。支持：/碎片、/规则 规则名、/任务 编号、/理智 数值、/重置、/分配 @玩家 角色名');
+            json_error('未知指令。支持：/规则 规则名、/任务 编号、/理智 数值、/重置、/分配 @玩家 角色名、/解除幻灵');
     }
 
     lzcx_save_state((int)$r['id'], $state);
     save_message($r['id'], $user, 'system', $msg);
 
     json_ok(['msg' => $msg, 'state' => $state]);
+}
+
+/**
+ * 房主开始游戏
+ * 灵之残响固定 4 人：1 房主 + 3 玩家，满员后才能开始。
+ */
+function lzcx_start_game(string $code) {
+    $user = require_login();
+    $r = lzcx_require_room($code);
+    if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以开始游戏', 403);
+
+    $state = lzcx_load_state($r);
+    if (!empty($state['game_started'])) json_error('游戏已经开始');
+
+    $pdo = DB::pdo();
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM room_members WHERE room_id = ?");
+    $stmt->execute([$r['id']]);
+    $total = (int)$stmt->fetchColumn();
+    if ($total < 4) json_error('人数不足 4 人，无法开始游戏', 403);
+    if ($total > 4) json_error('人数超过 4 人，请先调整成员后再开始', 403);
+
+    $state['game_started'] = true;
+    lzcx_save_state((int)$r['id'], $state);
+
+    save_message($r['id'], $user, 'system', '游戏开始！主持人将播报残响故事，玩家可通过角色技能进行推理。');
+
+    json_ok(['msg' => '游戏开始', 'state' => $state]);
 }
 
 /**

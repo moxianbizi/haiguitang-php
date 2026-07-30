@@ -2911,6 +2911,9 @@ async function renderLzcxRoom(code) {
   const state = room.state || {};
   store.currentRoomCode = code;
   store.currentRoomHostId = room.host?.id ?? null;
+  store.lzcxGameStarted = state.game_started;
+  store.lzcxMembersCount = members.length;
+  store.lzcxPossessedId = state.possessed_user_id ?? null;
   const isHost = room.host?.id === store.user?.id;
 
   const keyNodes = state.key_nodes || [];
@@ -2928,7 +2931,8 @@ async function renderLzcxRoom(code) {
               <div class="chat-code" id="lzcxCodeLine">
                 ${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}
                 ${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}
-                ${room.member_limit > 0 ? ` · 人数 ${members.length}/${room.member_limit}` : ""}
+                · 人数 ${members.length}/4
+                ${state.game_started ? "" : " · 等待开始"}
                 ${state.cleared ? " · 已通关" : ""}
               </div>
             </div>
@@ -2938,11 +2942,15 @@ async function renderLzcxRoom(code) {
           ${room.status === "ended" ? `<div class="chat-ended-notice">房间已结束，无法继续发言</div>` : ""}
           ${(() => {
             const isPossessed = state.possessed_user_id && state.possessed_user_id === store.user?.id;
-            const disabled = room.status === "ended" || isPossessed;
+            const notStarted = !state.game_started;
+            const disabled = room.status === "ended" || isPossessed || notStarted;
+            let placeholder = "发言…";
+            if (notStarted) placeholder = "游戏尚未开始，等待房主开始游戏";
+            else if (isPossessed) placeholder = "你正处于幻灵状态，等待他人向你提问";
             return `<div class="chat-input">
-              <input id="chatInput" placeholder="${isPossessed ? "你正处于幻灵状态，等待他人向你提问" : "发言…"}" onkeydown="if(event.key==='Enter')sendLzcxChat()" ${disabled ? "disabled" : ""} />
+              <input id="chatInput" placeholder="${placeholder}" onkeydown="if(event.key==='Enter')sendLzcxChat()" ${disabled ? "disabled" : ""} />
               <button class="btn btn-secondary" onclick="sendLzcxChat()" title="发送" ${disabled ? "disabled" : ""}>💬</button>
-              ${room.status !== "ended" && !isPossessed && room.ai_enabled
+              ${room.status !== "ended" && !isPossessed && !notStarted && room.ai_enabled
                 ? `<button class="btn btn-primary" onclick="sendLzcxAsk()" title="向AI提问" ${room.ai_question_limit > 0 && room.ai_question_count >= room.ai_question_limit ? "disabled" : ""}>🤖</button>`
                 : ""}
             </div>`;
@@ -2959,9 +2967,16 @@ async function renderLzcxRoom(code) {
           </div>
           <div class="side-card">
             <h4>剩余理智</h4>
-            <div style="font-size:1.6em;font-weight:600;color:var(--accent)">${state.sanity ?? "-"}<span style="font-size:0.6em;color:var(--text-3);margin-left:4px">/ ${state.initial_sanity ?? "-"}</span></div>
+            <div id="lzcxSanityVal" style="font-size:1.6em;font-weight:600;color:var(--accent)">${state.sanity ?? "-"}<span style="font-size:0.6em;color:var(--text-3);margin-left:4px">/ ${state.initial_sanity ?? "-"}</span></div>
             ${!isHost ? `<p class="ai-hint" style="margin:8px 0 0;font-size:0.85em">在聊天框输入 / 可使用角色技能。</p>` : ""}
           </div>
+          ${isHost && !state.game_started ? `
+          <div class="side-card">
+            <h4>开始游戏</h4>
+            <p class="ai-hint" style="margin:0 0 10px">当前人数 ${members.length}/4，${members.length === 4 ? '已满员，可以开始游戏' : '需要满 4 人才能开始'}。</p>
+            <button class="btn btn-primary" style="width:100%" onclick="startLzcxGame('${escapeJs(room.code)}')" ${members.length !== 4 ? "disabled" : ""}>开始游戏</button>
+          </div>
+          ` : ""}
           ${isHost ? `
           <div class="side-card host-panel">
             <h4>🎙 主持人面板</h4>
@@ -2974,12 +2989,12 @@ async function renderLzcxRoom(code) {
             ` : ""}
             <p class="ai-hint" style="margin:0 0 8px">纯对话模式：在聊天框输入指令推进游戏。</p>
             <div class="lzcx-host-cmds" style="font-size:0.85em;color:var(--text-3);line-height:1.7;margin-bottom:12px">
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/碎片</code> 释放下一片碎片</div>
               <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/规则 规则名</code> 触发隐藏规则</div>
               <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/任务 编号</code> 标记任务完成</div>
               <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/理智 数值</code> 调整剩余理智</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/解除幻灵</code> 解除当前幻灵状态</div>
               <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/重置</code> 重置状态机</div>
-              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/分配 @玩家 角色名</code> 分配角色</div>
+              <div><code style="background:var(--bg-2);padding:2px 6px;border-radius:4px">/分配 @玩家 角色名</code> 分配角色（仅游戏开始前）</div>
             </div>
             <h4 style="font-size:0.95em;margin:0 0 8px">成员与角色</h4>
             <div class="lzcx-members" id="lzcxMembersBox" style="margin-bottom:8px">
@@ -2990,7 +3005,7 @@ async function renderLzcxRoom(code) {
                     ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
                     ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
                   </div>
-                  ${m.role !== "host" && room.status !== "ended" ? `
+                  ${m.role !== "host" && room.status !== "ended" && !state.game_started ? `
                     <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
                       <option value="">未分配</option>
                       ${(state.characters_meta || []).map((c) => {
@@ -3020,6 +3035,7 @@ async function renderLzcxRoom(code) {
   body.scrollTop = body.scrollHeight;
 
   if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
+  if (store.lzcxStatePollTimer) { clearInterval(store.lzcxStatePollTimer); store.lzcxStatePollTimer = null; }
   store.pollInFlight = false;
   store.pollLastId = messages.length ? messages[messages.length - 1].id : 0;
   connectLzcxRoom(code);
@@ -3028,12 +3044,15 @@ async function renderLzcxRoom(code) {
 function connectLzcxRoom(code) {
   toast("已加入房间 " + code, "ok");
   if (store.pollTimer) clearInterval(store.pollTimer);
+  if (store.lzcxStatePollTimer) clearInterval(store.lzcxStatePollTimer);
   store.pollTimer = setInterval(() => pollLzcxMessages(code), 1500);
+  store.lzcxStatePollTimer = setInterval(() => refreshLzcxRoomState(code), 3000);
 }
 
 async function pollLzcxMessages(code) {
   if (location.hash !== "#/lzcxroom/" + code) {
     if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
+    if (store.lzcxStatePollTimer) { clearInterval(store.lzcxStatePollTimer); store.lzcxStatePollTimer = null; }
     return;
   }
   if (store.pollInFlight) return;
@@ -3112,6 +3131,14 @@ window.sendLzcxAsk = async () => {
 async function refreshLzcxRoomState(code) {
   const { ok, data } = await API.json(`/api/lzcxroom/${code}`);
   if (!ok || !data.room) return;
+  const started = data.room.state?.game_started;
+  const membersCount = data.room.members?.length;
+  const possessedId = data.room.state?.possessed_user_id ?? null;
+  // 游戏状态、人数或幻灵状态变化时重渲染整个房间（开始按钮/输入框禁用态会变化）
+  if (started !== store.lzcxGameStarted || membersCount !== store.lzcxMembersCount || possessedId !== store.lzcxPossessedId) {
+    renderLzcxRoom(code);
+    return;
+  }
   refreshLzcxStateUI(code, data.room.state || {}, data.room);
 }
 
@@ -3121,27 +3148,12 @@ function refreshLzcxStateUI(code, state, room) {
 
   const codeEl = $("#lzcxCodeLine");
   if (codeEl && room) {
-    codeEl.textContent = `${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""}${room.member_limit > 0 ? ` · 人数 ${members.length}/${room.member_limit}` : ""}${state.cleared ? " · 已通关" : ""}`;
+    codeEl.textContent = `${room.ai_enabled ? "AI 主持人" : "真人主持（房主）"}${room.ai_question_limit > 0 ? ` · AI提问 ${room.ai_question_count}/${room.ai_question_limit}` : ""} · 人数 ${members.length}/4${state.game_started ? "" : " · 等待开始"}${state.cleared ? " · 已通关" : ""}`;
   }
 
   const sanityEl = $("#lzcxSanityVal");
   if (sanityEl) sanityEl.textContent = `${state.sanity ?? "-"}/${state.initial_sanity ?? "-"}`;
-  const fragmentEl = $("#lzcxFragmentVal");
-  if (fragmentEl) fragmentEl.textContent = `${state.released_fragments ?? 0}/${state.total_fragments ?? 0}`;
-  const nodeEl = $("#lzcxNodeVal");
-  if (nodeEl) {
-    const keyNodes = state.key_nodes || [];
-    const hitCount = keyNodes.filter((n) => n.hit).length;
-    nodeEl.textContent = keyNodes.length ? `${hitCount}/${keyNodes.length}` : "待AI拆分";
-  }
-  const rulesBox = $("#lzcxRulesBox");
-  if (rulesBox) {
-    rulesBox.innerHTML = (state.triggered_rules?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已触发规则</span>${state.triggered_rules.map((r) => `<span class="lzcx-tag">${escapeHtml(r)}</span>`).join("")}</div>` : "");
-  }
-  const tasksBox = $("#lzcxTasksBox");
-  if (tasksBox) {
-    tasksBox.innerHTML = (state.completed_tasks?.length ? `<div class="lzcx-tags"><span class="lzcx-tags-label">已完成任务</span>${state.completed_tasks.map((t) => `<span class="lzcx-tag">任务${escapeHtml(String(t))}</span>`).join("")}</div>` : "");
-  }
+
 
   const membersBox = $("#lzcxMembersBox");
   if (membersBox && room) {
@@ -3152,7 +3164,7 @@ function refreshLzcxStateUI(code, state, room) {
           ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
           ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
         </div>
-        ${isHost && m.role !== "host" && room.status !== "ended" ? `
+        ${isHost && m.role !== "host" && room.status !== "ended" && !state.game_started ? `
           <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
             <option value="">未分配</option>
             ${(state.characters_meta || []).map((c) => {
@@ -3166,42 +3178,6 @@ function refreshLzcxStateUI(code, state, room) {
     `).join("");
   }
 
-  const oldClear = $("#lzcxClearBox");
-  if (state.cleared) {
-    const html = `<p class="ai-hint" style="margin:0;color:var(--ok,#2c8)">🏆 已通关，真相大白！</p>`;
-    if (oldClear) oldClear.innerHTML = html;
-    else {
-      const keyBox = $("#lzcxKeyBox");
-      const wrap = document.createElement("div");
-      wrap.className = "side-card";
-      wrap.id = "lzcxClearBox";
-      wrap.innerHTML = html;
-      if (keyBox) keyBox.parentNode.insertBefore(wrap, keyBox);
-    }
-  } else if (oldClear) {
-    oldClear.remove();
-  }
-
-  const releaseBtn = $("#lzcxReleaseBtn");
-  if (releaseBtn) {
-    releaseBtn.disabled = (state.released_fragments || 0) >= (state.total_fragments || 0);
-  }
-
-  if (room) {
-    const keyBox = $("#lzcxKeyBox");
-    if (keyBox && room.ai_enabled) {
-      keyBox.innerHTML = `
-        <h4>AI Key（房间共用）</h4>
-        ${room.has_host_key
-          ? `<p class="ai-hint" style="margin:0 0 8px"><span style="color:var(--ok,#2c8)">✓ 房主已绑定 AI Key，全员可提问</span></p>`
-          : `<p class="ai-hint" style="margin:0 0 8px"><span class="warn">⚠ 本房间尚未绑定 AI Key</span></p>`}
-        ${isHost && room.status !== "ended" ? `
-          <button class="btn btn-secondary" style="width:100%;margin-bottom:6px" onclick="bindLzcxHostKey('${escapeJs(room.code)}')">${room.has_host_key ? "更新 AI Key" : "绑定 AI Key"}</button>
-          ${room.has_host_key ? `<button class="btn btn-ghost" style="width:100%" onclick="unbindLzcxHostKey('${escapeJs(room.code)}')">解绑</button>` : ""}
-        ` : ""}
-      `;
-    }
-  }
 }
 
 window.bindLzcxHostKey = async (code) => {
@@ -3241,10 +3217,10 @@ window.assignLzcxCharacter = async (userId, character) => {
   refreshLzcxRoomState(code);
 };
 
-window.releaseLzcxFragment = async (code) => {
-  const { ok, data } = await API.post(`/api/lzcxroom/${code}/release-fragment`, {});
-  if (!ok) { toast(data.error || "释放失败", "err"); return; }
-  toast(data.msg || "已释放", "ok");
+window.startLzcxGame = async (code) => {
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/start`, {});
+  if (!ok) { toast(data.error || "开始游戏失败", "err"); return; }
+  toast("游戏开始", "ok");
   refreshLzcxRoomState(code);
 };
 
@@ -3317,10 +3293,7 @@ window.openLzcxTestRoomModal = async () => {
           <label>AI 提问次数上限（0 = 无限）</label>
           <input class="input" id="lzcxTestAiLimit" type="number" min="0" max="999" value="0" />
         </div>
-        <div class="field">
-          <label>房间人数上限（0 = 无限）</label>
-          <input class="input" id="lzcxTestMemberLimit" type="number" min="0" max="99" value="0" />
-        </div>
+        <p class="ai-hint" style="margin-top:12px">灵之残响固定 4 人房（1 房主 + 3 玩家）。</p>
         <button class="btn btn-primary" style="width:100%;margin-top:10px" onclick="createLzcxTestRoom()">创建测试房</button>
       </div>
     </div>
@@ -3336,7 +3309,6 @@ window.createLzcxTestRoom = async () => {
     soup_id: soupId,
     ai_enabled,
     ai_question_limit: parseInt($("#lzcxTestAiLimit")?.value) || 0,
-    member_limit: parseInt($("#lzcxTestMemberLimit")?.value) || 0,
   });
   if (!ok) { toast(data.error || "创建失败", "err"); return; }
   if (ai_enabled && KeyMgr.has()) {
