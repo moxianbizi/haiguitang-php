@@ -1094,10 +1094,11 @@ function lzcx_ask(string $code) {
         ]);
     }
 
-    // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点/隐藏规则状态 =====
+    // ===== 剥离 AI 回答中的元信息标记 + 更新关键节点/隐藏规则/任务状态 =====
     $justCleared = false;
     $newHits = [];
     $newTriggers = [];
+    $newTasks = [];
     if ($keyNodes !== null) {
         // 1) 处理 NODES 标记（AI 自拆节点，仅在 key_nodes 为空时接收）
         if (empty($state['key_nodes']) && preg_match('/<<<NODES:([^>]+?)>>>/u', $answer, $nm)) {
@@ -1138,9 +1139,24 @@ function lzcx_ask(string $code) {
             }
             $answer = preg_replace('/<<<TRIGGER:[^>]*?>>>/u', '', $answer);
         }
+
+        // 4) 处理 TASK 标记（AI 自动判定任务完成）
+        if (preg_match_all('/<<<TASK:(\d+)>>>/u', $answer, $tmm)) {
+            foreach ($tmm[1] as $taskNum) {
+                $taskNum = (int)$taskNum;
+                if ($taskNum <= 0) continue;
+                $completedList = $state['completed_tasks'] ?? [];
+                if (!in_array($taskNum, $completedList, true)) {
+                    $state['completed_tasks'][] = $taskNum;
+                    $newTasks[] = $taskNum;
+                }
+            }
+            sort($state['completed_tasks']);
+            $answer = preg_replace('/<<<TASK:\d+>>>/u', '', $answer);
+        }
         $answer = trim($answer);
 
-        // 4) 通关判定：命中节点数 / 总节点数 ≥ 85%
+        // 5) 通关判定：命中节点数 / 总节点数 ≥ 85%
         $nodes = $state['key_nodes'] ?? [];
         if (!empty($nodes) && empty($state['cleared'])) {
             $total = count($nodes);
@@ -1176,6 +1192,11 @@ function lzcx_ask(string $code) {
     // 隐藏规则触发系统提示
     if (!empty($newTriggers)) {
         save_message($r['id'], null, 'system', '📜 AI 触发隐藏规则：' . implode('、', $newTriggers));
+    }
+    // 任务完成系统提示
+    if (!empty($newTasks)) {
+        $taskLabels = array_map(fn($n) => $n === 999 ? '最终任务' : "任务{$n}", $newTasks);
+        save_message($r['id'], null, 'system', '✅ AI 判定任务完成：' . implode('、', $taskLabels));
     }
     // 通关系统提示
     if ($justCleared) {
@@ -1220,6 +1241,7 @@ function lzcx_complete_task(string $code) {
     $user = require_login();
     $r = lzcx_require_room($code);
     if ((int)$r['host_id'] !== (int)$user['id']) json_error('只有房主可以标记任务完成', 403);
+    if (!empty($r['ai_enabled'])) json_error('AI 主持模式下，任务完成由 AI 自动判定，房主无需手动标记', 403);
 
     $data = body_json();
     $taskNum = (int)($data['task'] ?? 0);

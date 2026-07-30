@@ -451,6 +451,17 @@ function ask_ai_lzcx(
     $sysExtra .= "【已完成的任务】" . (empty($tasks) ? '（暂无）' : '任务 ' . implode(',', $tasks)) . "\n";
     $sysExtra .= "- 任务分层按序推进，未在列表中的任务严禁判定完成或剧透后续任务。\n\n";
 
+    $tasksMeta = $state['tasks_meta'] ?? [];
+    if (!empty($tasksMeta)) {
+        $sysExtra .= "【任务目标 · 由你负责判定完成】\n";
+        foreach ($tasksMeta as $t) {
+            $numLabel = ($t['num'] ?? 0) === 999 ? '最终任务' : '任务' . ($t['num'] ?? 0);
+            $sysExtra .= "- {$numLabel}：{$t['desc']}\n";
+        }
+        $sysExtra .= "- 监听玩家每次提问或陈述，一旦明确完成某个任务目标，必须在本回答最末尾追加标记 `<<<TASK:编号>>>`（编号用数字，最终任务用 999）。\n";
+        $sysExtra .= "- 该标记后端会自动剥离，玩家不可见；完成后任务进入「已完成的任务」列表。\n\n";
+    }
+
     $sanity = (int)($state['sanity'] ?? 0);
     if ($sanity > 0) {
         $sysExtra .= "【剩余理智】{$sanity}\n";
