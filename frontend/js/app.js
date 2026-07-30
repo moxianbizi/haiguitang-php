@@ -2974,10 +2974,37 @@ async function renderLzcxRoom(code) {
           <div class="side-card">
             <h4>开始游戏</h4>
             <p class="ai-hint" style="margin:0 0 10px">当前人数 ${members.length}/4，${members.length === 4 ? '已满员，可以开始游戏' : '需要满 4 人才能开始'}。</p>
+            <div class="lzcx-members" style="margin-bottom:10px">
+              ${members.map((m) => `
+                <div class="lzcx-member" style="align-items:center">
+                  <div class="lzcx-member-name">
+                    ${escapeHtml(m.username)}
+                    ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
+                  </div>
+                  ${m.role !== "host" && room.status !== "ended" ? `
+                    <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
+                      <option value="">未分配</option>
+                      ${(state.characters_meta || []).map((c) => {
+                        const info = (state.characters_info || []).find((x) => x.name === c);
+                        const label = info ? `${c} · ${info.dept}` : c;
+                        return `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(label)}</option>`;
+                      }).join("")}
+                    </select>
+                  ` : ""}
+                </div>
+              `).join("")}
+            </div>
             <button class="btn btn-primary" style="width:100%" onclick="startLzcxGame('${escapeJs(room.code)}')" ${members.length !== 4 ? "disabled" : ""}>开始游戏</button>
           </div>
           ` : ""}
-          ${isHost ? `
+          ${isHost && room.ai_enabled && state.game_started && state.possessed_user_id ? `
+          <div class="side-card">
+            <h4>幻灵状态</h4>
+            <p class="ai-hint" style="margin:0 0 10px">当前有玩家处于幻灵状态。</p>
+            <button class="btn btn-secondary" style="width:100%" onclick="sendLzcxHostCommand('/解除幻灵')">解除幻灵</button>
+          </div>
+          ` : ""}
+          ${isHost && !room.ai_enabled ? `
           <div class="side-card host-panel">
             <h4>🎙 主持人面板</h4>
             ${!room.ai_enabled && soup?.base ? `
@@ -3005,16 +3032,6 @@ async function renderLzcxRoom(code) {
                     ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
                     ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
                   </div>
-                  ${m.role !== "host" && room.status !== "ended" && !state.game_started ? `
-                    <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
-                      <option value="">未分配</option>
-                      ${(state.characters_meta || []).map((c) => {
-                        const info = (state.characters_info || []).find((x) => x.name === c);
-                        const label = info ? `${c} · ${info.dept}` : c;
-                        return `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(label)}</option>`;
-                      }).join("")}
-                    </select>
-                  ` : ""}
                 </div>
               `).join("")}
             </div>
@@ -3164,16 +3181,6 @@ function refreshLzcxStateUI(code, state, room) {
           ${m.role === "host" ? '<span class="lzcx-role host">房主</span>' : ""}
           ${m.character_name ? `<span class="lzcx-role char">${escapeHtml(m.character_name)}</span>` : ""}
         </div>
-        ${isHost && m.role !== "host" && room.status !== "ended" && !state.game_started ? `
-          <select class="lzcx-char-select" onchange="assignLzcxCharacter(${m.user_id}, this.value)">
-            <option value="">未分配</option>
-            ${(state.characters_meta || []).map((c) => {
-              const info = (state.characters_info || []).find((x) => x.name === c);
-              const label = info ? `${c} · ${info.dept}` : c;
-              return `<option value="${escapeHtml(c)}" ${m.character_name === c ? "selected" : ""}>${escapeHtml(label)}</option>`;
-            }).join("")}
-          </select>
-        ` : ""}
       </div>
     `).join("");
   }
@@ -3221,6 +3228,14 @@ window.startLzcxGame = async (code) => {
   const { ok, data } = await API.post(`/api/lzcxroom/${code}/start`, {});
   if (!ok) { toast(data.error || "开始游戏失败", "err"); return; }
   toast("游戏开始", "ok");
+  refreshLzcxRoomState(code);
+};
+
+window.sendLzcxHostCommand = async (cmd) => {
+  const code = store.currentRoomCode;
+  if (!code) return;
+  const { ok, data } = await API.post(`/api/lzcxroom/${code}/host-command`, { command: cmd });
+  if (!ok) { toast(data.error || "指令失败", "err"); return; }
   refreshLzcxRoomState(code);
 };
 

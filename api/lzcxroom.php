@@ -1298,12 +1298,18 @@ function lzcx_host_command(string $code) {
     $action = strtolower($parts[0] ?? '');
     $arg = trim(implode(' ', array_slice($parts, 1)));
 
+    // AI 主持模式下，房主只能分配角色（游戏开始前）和解除幻灵，其余推进操作交给 AI
+    $aiHostAllowed = ['分配', 'assign', 'assign-character', '解除幻灵', '解除', 'unpossess'];
+    if (!empty($r['ai_enabled']) && !in_array($action, $aiHostAllowed, true)) {
+        json_error('AI 主持模式下，房主只能分配角色（游戏开始前）和解除幻灵', 403);
+    }
+
     $state = lzcx_load_state($r);
     $msg = '';
 
     // 游戏状态校验：
     // - /分配 只能在游戏开始前使用
-    // - /重置 始终允许（重置状态机）
+    // - /重置 始终允许（重置状态机，仅在人工主持模式下）
     // - 其余推进类指令需游戏已开始
     $isAssign = in_array($action, ['分配', 'assign', 'assign-character'], true);
     $isReset = in_array($action, ['重置', 'reset', '重置状态'], true);
